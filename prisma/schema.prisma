@@ -1,0 +1,170 @@
+// PeopleOps AI — operational data model.
+//
+// This file is the source of truth for the core tables. Two clients are
+// generated from it: one for Node (API server, tests, pipeline CLI) and one
+// for the browser, where the same Prisma queries run against PGlite.
+//
+// The staging schema (raw source extracts) and the analytics schema
+// (KPI views) are plain SQL in prisma/migrations, because they are not
+// application entities: staging is permissive by design, analytics is
+// read-only SQL.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  runtime      = "nodejs"
+  moduleFormat = "esm"
+}
+
+generator browser {
+  provider      = "prisma-client"
+  output        = "../src/generated/prisma-browser"
+  runtime       = "workerd"
+  moduleFormat  = "esm"
+  compilerBuild = "small"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Shift {
+  EARLY
+  LATE
+  NIGHT
+}
+
+enum ContractType {
+  PERMANENT
+  FIXED_TERM
+}
+
+enum ExitType {
+  VOLUNTARY
+  INVOLUNTARY
+  END_OF_CONTRACT
+}
+
+enum AbsenceCode {
+  SICK
+  UNEXCUSED
+  VACATION
+}
+
+enum Severity {
+  ERROR
+  WARNING
+}
+
+/// OPEN: affected data is held back from KPIs.
+/// ACKNOWLEDGED: reviewed, still held back, note recorded.
+/// OVERRIDDEN: reviewer decided the data is usable; it flows into KPIs.
+enum IssueStatus {
+  OPEN
+  ACKNOWLEDGED
+  OVERRIDDEN
+}
+
+model Department {
+  id        Int        @id
+  code      String     @unique
+  name      String
+  area      String
+  employees Employee[]
+
+  @@map("department")
+}
+
+model Employee {
+  id           Int                  @id @default(autoincrement())
+  badgeId      String               @unique @map("badge_id")
+  departmentId Int                  @map("department_id")
+  jobFamily    String               @map("job_family")
+  /// NULL when the HR system has no shift assignment (flagged by rule HR_SHIFT_MISSING).
+  shift        Shift?
+  contractType ContractType         @map("contract_type")
+  hireDate     DateTime             @map("hire_date") @db.Date
+  exitDate     DateTime?            @map("exit_date") @db.Date
+  exitType     ExitType?            @map("exit_type")
+  department   Department           @relation(fields: [departmentId], references: [id])
+  attendance   AttendanceDay[]
+  training     TrainingAssignment[]
+
+  @@index([departmentId])
+  @@map("employee")
+}
+
+model AttendanceDay {
+  employeeId     Int          @map("employee_id")
+  workDate       DateTime     @map("work_date") @db.Date
+  scheduledHours Decimal      @map("scheduled_hours") @db.Decimal(4, 2)
+  workedHours    Decimal      @map("worked_hours") @db.Decimal(4, 2)
+  overtimeHours  Decimal      @default(0) @map("overtime_hours") @db.Decimal(4, 2)
+  absenceCode    AbsenceCode? @map("absence_code")
+  employee       Employee     @relation(fields: [employeeId], references: [id])
+
+  @@id([employeeId, workDate])
+  @@index([workDate])
+  @@map("attendance_day")
+}
+
+model TrainingProgram {
+  id          Int                  @id
+  code        String               @unique
+  name        String
+  category    String
+  mandatory   Boolean
+  passScore   Int                  @default(80) @map("pass_score")
+  assignments TrainingAssignment[]
+
+  @@map("training_program")
+}
+
+model TrainingAssignment {
+  id          Int             @id @default(autoincrement())
+  employeeId  Int             @map("employee_id")
+  programId   Int             @map("program_id")
+  assignedOn  DateTime        @map("assigned_on") @db.Date
+  dueOn       DateTime        @map("due_on") @db.Date
+  completedOn DateTime?       @map("completed_on") @db.Date
+  preScore    Int?            @map("pre_score")
+  postScore   Int?            @map("post_score")
+  employee    Employee        @relation(fields: [employeeId], references: [id])
+  program     TrainingProgram @relation(fields: [programId], references: [id])
+
+  @@index([programId])
+  @@index([employeeId])
+  @@map("training_assignment")
+}
+
+model PipelineRun {
+  id         Int            @id @default(autoincrement())
+  startedAt  DateTime       @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt DateTime?      @map("finished_at") @db.Timestamptz(3)
+  asOf       DateTime       @map("as_of") @db.Date
+  status     String
+  /// Per-source row counts: received, loaded, held back.
+  stats      Json?
+  issues     QualityIssue[]
+
+  @@map("pipeline_run")
+}
+
+model QualityIssue {
+  id             Int         @id @default(autoincrement())
+  runId          Int         @map("run_id")
+  ruleCode       String      @map("rule_code")
+  source         String
+  sourceKey      String      @map("source_key")
+  /// Number of source rows this issue covers (e.g. all time-clock rows of one badge).
+  rowCount       Int         @default(1) @map("row_count")
+  detail         String
+  severity       Severity
+  status         IssueStatus @default(OPEN)
+  reviewedAt     DateTime?   @map("reviewed_at") @db.Timestamptz(3)
+  reviewNote     String?     @map("review_note")
+  run            PipelineRun @relation(fields: [runId], references: [id])
+
+  @@index([status, ruleCode])
+  @@map("quality_issue")
+}

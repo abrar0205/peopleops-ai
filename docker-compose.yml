@@ -1,0 +1,14 @@
+# Local PostgreSQL for server mode.
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: peopleops
+      POSTGRES_PASSWORD: peopleops
+      POSTGRES_DB: peopleops
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U peopleops"]
+      interval: 5s
+      retries: 10

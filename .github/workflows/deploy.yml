@@ -1,8 +1,9 @@
-name: Deploy demo
+name: CI and deploy
 
 on:
   push:
     branches: ["main"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -11,32 +12,82 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - run: npm install --no-audit --no-fund
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  server-postgres:
+    # The same migrations, pipeline and API against a real PostgreSQL server.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: peopleops
+          POSTGRES_PASSWORD: peopleops
+          POSTGRES_DB: peopleops
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U peopleops" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://peopleops:peopleops@localhost:5432/peopleops
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma migrate deploy
+      - name: Prisma schema matches the migrated database
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+      - run: npm run pipeline
+      - name: API smoke test
+        run: |
+          npm run server &
+          for i in $(seq 1 30); do curl -sf localhost:3001/trpc/meta.status >/dev/null && break; sleep 1; done
+          curl -sf localhost:3001/trpc/insights.signals | grep -q 'LOG|NIGHT'
+          curl -sf -X POST localhost:3001/trpc/sql.run -H 'content-type: application/json' -d '{"sql":"select * from public.employee"}' | grep -q 'permission denied'
+
+  build:
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
       - run: npm run build
       - uses: actions/configure-pages@v5
+        if: github.ref == 'refs/heads/main'
         with:
           enablement: true
       - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main'
         with:
           path: ./dist
 
   deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: [build]
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    needs: build
     steps:
       - name: Deploy
         id: deployment
