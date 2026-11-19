@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useTRPC } from '../../browser/trpc'
 import { departmentName } from '../../api/queries'
-import { Card, EvidenceButton, PageHead, Skeleton, fmt } from '../common'
+import { Card, EvidenceButton, PageHead, Skeleton, Takeaway, fmt } from '../common'
 import { BarList, Scatter } from '../charts'
 
 export function Training() {
@@ -16,6 +16,13 @@ export function Training() {
       <PageHead eyebrow="Learning" title="Training compliance and effectiveness">
         Completion shows who sat the course. The change between pre- and post-assessment shows whether anyone learned something. Report both.
       </PageHead>
+      <Takeaway>{(() => {
+        if (!programs.data || !overdue.data) return null
+        const weakOnes = programs.data.rows.filter(weak)
+        const worst = [...overdue.data.rows].sort((a, b) => b.overdue / Math.max(1, b.assignments_due) - a.overdue / Math.max(1, a.assignments_due))[0]
+        const w = weakOnes.length ? `${weakOnes.length === 1 ? `${weakOnes[0].program_name} is` : `${weakOnes.length} programs are`} completed on time but barely move assessment scores.` : 'Every program that is completed on time also moves assessment scores.'
+        return `${w} ${fmt(plantOverdue)}% of mandatory training is overdue${worst ? `, most in ${departmentName(worst.department_code)}` : ''}.`
+      })()}</Takeaway>
 
       <div className="grid-main">
         <Card

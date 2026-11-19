@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useTRPC } from '../../browser/trpc'
 import { groupLabel } from '../../api/queries'
 import { DEPARTMENTS } from '../../domain/scenario'
-import { Card, EvidenceButton, PageHead, Segmented, Select, Skeleton, fmtDate, setParams } from '../common'
+import { Card, EvidenceButton, PageHead, Segmented, Select, Skeleton, Takeaway, fmt, fmtDate, setParams } from '../common'
 import { BarList, Heatmap, LineChart } from '../charts'
 
 export const SHIFT_OPTIONS = [
@@ -85,6 +85,23 @@ export function Attendance({ params }: { params: URLSearchParams }) {
   const unit = metric === 'unplanned_absence_rate' ? '%' : ' h'
   const plantRow = grid.data?.rows.find(r => r.department_code === 'ALL' && r.shift === 'ALL')
 
+  const takeaway = (() => {
+    if (!selected.data || !plant.data) return null
+    const avg = (rows: { unplanned_absence_rate: number | null }[]) => {
+      const v = rows.map(r => r.unplanned_absence_rate).filter((x): x is number => x != null)
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null
+    }
+    // Prefer the pooled 4-week figure the board and heatmap show, so the numbers match across pages.
+    const pooled = grid.data?.rows.find(g => g.department_code === dept && g.shift === shift && !g.suppressed)?.unplanned_absence_rate ?? null
+    const recent = pooled ?? avg(selected.data.rows.slice(-4)), before = avg(selected.data.rows.slice(-16, -4))
+    const plantRecent = plantRow?.unplanned_absence_rate ?? avg(plant.data.rows.slice(-4))
+    if (recent == null || before == null) return `${label.replace(' · ', ' ')}: too few people in this group to report weekly absence.`
+    const dir = recent - before
+    const trend = Math.abs(dir) < 0.3 ? 'is flat' : dir > 0 ? `is up ${fmt(dir)} points` : `is down ${fmt(-dir)} points`
+    const vsPlant = isPlant || plantRecent == null ? '' : `, against ${fmt(plantRecent)}% for the plant`
+    return `${label.replace(' · ', ' ')} unplanned absence ${trend}: ${fmt(recent)}% over the last four weeks${vsPlant}, from ${fmt(before)}% in the twelve weeks before.`
+  })()
+
   return (
     <>
       <PageHead
@@ -99,6 +116,7 @@ export function Attendance({ params }: { params: URLSearchParams }) {
       >
         Unplanned absence counts sickness and unexcused absence (including no-shows) against scheduled hours; vacation is planned and excluded from both sides.
       </PageHead>
+      <Takeaway>{takeaway}</Takeaway>
 
       <div className="grid-2">
         {trend('unplanned_absence_rate', 'Unplanned absence', '%', 1)}

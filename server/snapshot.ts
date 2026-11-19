@@ -42,6 +42,11 @@ for (const q of SNAPSHOT_QUERIES) {
   entries.push({ path: q.path, input: q.input, data: await fn(q.input) })
 }
 
+// The what-if toggle on the brief needs the impact of the day the quality gate excluded.
+const overview = entries.find(e => e.path === 'quality.overview')!.data as { excluded: { rows: { work_date: string }[] } }
+const day = overview.excluded.rows[0]?.work_date
+if (day) entries.push({ path: 'quality.exclusionImpact', input: { day }, data: await api.quality.exclusionImpact({ day }) })
+
 const snapshot: Snapshot = {
   asOf: extracts.asOf,
   sources: run.sources,

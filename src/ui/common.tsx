@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import type { Evidence } from '../api/context'
 
 // ------------------------------------------------------------------ format
@@ -21,12 +22,29 @@ const parseHash = (): Route => {
   return { page: path || 'overview', params: new URLSearchParams(query ?? '') }
 }
 
+type ViewTransitionDoc = Document & { startViewTransition?: (cb: () => void) => unknown }
+
+/**
+ * Hash router. Page changes run inside a view transition where supported, so
+ * the content cross-fades and a cell named `focus-cell` morphs into its
+ * counterpart on the next page. Filter changes on the same page swap instantly.
+ */
 export function useRoute(): Route {
   const [route, setRoute] = useState(parseHash)
+  const current = useRef(route.page)
   useEffect(() => {
     const on = () => {
-      setRoute(parseHash())
-      window.scrollTo({ top: 0 })
+      const next = parseHash()
+      const pageChanged = next.page !== current.current
+      current.current = next.page
+      const apply = () => {
+        flushSync(() => setRoute(next))
+        if (pageChanged) window.scrollTo({ top: 0 })
+      }
+      const doc = document as ViewTransitionDoc
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      if (pageChanged && doc.startViewTransition && !reduce) doc.startViewTransition(apply)
+      else apply()
     }
     window.addEventListener('hashchange', on)
     return () => window.removeEventListener('hashchange', on)
@@ -111,6 +129,12 @@ export function PageHead({ eyebrow, title, children, actions }: { eyebrow: strin
       {actions && <div className="filters">{actions}</div>}
     </header>
   )
+}
+
+/** The one sentence a page wants you to leave with, computed from its data. */
+export function Takeaway({ children }: { children: ReactNode }) {
+  if (!children) return null
+  return <p className="takeaway"><span className="takeaway-mark" aria-hidden="true" />{children}</p>
 }
 
 export function Segmented<T extends string | number>({ value, options, onChange, label }: { value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; label: string }) {

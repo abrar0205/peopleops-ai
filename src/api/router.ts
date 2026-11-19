@@ -50,6 +50,7 @@ const attendance = t.router({
   byGroup: publicProcedure
     .input(z.object({ by: q.GroupBy, weeks: Weeks }))
     .query(({ ctx, input }) => q.attendanceByGroup(ctx, input.by, input.weeks)),
+  boardTrends: publicProcedure.query(({ ctx }) => q.boardTrends(ctx)),
   weekday: publicProcedure
     .input(z.object({ department: q.DepartmentCode }))
     .query(({ ctx, input }) => q.absenceByWeekday(ctx, input.department)),

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useTRPC } from '../../browser/trpc'
 import { REPO_URL } from '../App'
 import { Card, PageHead } from '../common'
+import { useRuntime } from '../App'
 
 function Architecture() {
   const box = (x: number, y: number, w: number, title: string, sub: string, dark = false) => (
@@ -49,10 +50,11 @@ function Architecture() {
 
 export function Method() {
   const trpc = useTRPC()
+  const { replayIntro } = useRuntime()
   const ref = useQuery(trpc.meta.reference.queryOptions())
   return (
     <>
-      <PageHead eyebrow="Method & privacy" title="How the numbers are made">
+      <PageHead eyebrow="Method & privacy" title="How the numbers are made" actions={<button className="btn-line small" onClick={replayIntro}>Replay the pipeline</button>}>
         The whole backend runs in this tab: PostgreSQL compiled to WebAssembly, Prisma Client, and a tRPC router. The same code runs on a Node server against PostgreSQL.
       </PageHead>
 

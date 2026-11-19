@@ -29,5 +29,6 @@ export default defineConfig({
   plugins: [react(), wasmModule()],
   build: { target: 'es2022', chunkSizeWarningLimit: 1500 },
   optimizeDeps: { exclude: ['@electric-sql/pglite'], esbuildOptions: { target: 'es2022' } },
-  worker: { format: 'es' },
+  // The backend (PGlite + Prisma + tRPC) runs in a worker, so it needs the wasm plugin too.
+  worker: { format: 'es', plugins: () => [wasmModule()] },
 })

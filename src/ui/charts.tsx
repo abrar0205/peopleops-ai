@@ -124,7 +124,7 @@ export function LineChart({ labels, series, unit = '', digits = 1, height = 220,
           ) : null,
         )}
         {series.map(s => (
-          <path key={s.name} d={path(s.values)} className="series-line" stroke={COLORS[s.color]} strokeWidth={s.color === 'reference' ? 1.5 : 2} />
+          <path key={s.name} d={path(s.values)} pathLength={1} className={`series-line${s.color === 'reference' ? ' ref' : ''}`} stroke={COLORS[s.color]} strokeWidth={s.color === 'reference' ? 1.5 : 2.25} />
         ))}
         {ends.map(e => (
           <text key={e.s.name} className="end-label" x={width - pad.r + 6} y={e.yy + 4}>
@@ -273,7 +273,7 @@ export function Heatmap({ rows, cols, cell, unit = '', digits = 1, selected, onS
                   key={c.key}
                   role="cell"
                   className={`heat-cell ${isSel ? 'selected' : ''}`}
-                  style={{ background: `var(--seq-${s})`, color: s >= 4 ? '#fff' : 'var(--text)' }}
+                  style={{ background: `var(--seq-${s})`, color: s >= 4 ? 'var(--heat-hi-text)' : 'var(--text)', viewTransitionName: isSel ? 'focus-cell' : undefined }}
                   onClick={onSelect ? () => onSelect(r.key, c.key) : undefined}
                   title={`${r.label} · ${c.label}: ${fmt(v.value, digits)}${unit}${v.n != null ? ` (${v.n} people)` : ''}`}
                 >

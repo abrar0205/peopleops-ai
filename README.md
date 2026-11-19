@@ -26,7 +26,9 @@ All data is synthetic. No employee-level prediction or scoring is used.
 - Evidence links from dashboard metrics back to the SQL that produced them.
 - Privacy controls that suppress groups smaller than 10.
 
-The home page reads as a one-page weekly brief: a headline generated from the strongest signal, a department × shift board, the changes worth a conversation, the data-quality gate and the stack. Drill-downs live under Explore, and every number opens the SQL that produced it.
+The home page reads as a one-page weekly brief. A headline is generated from the strongest signal, and a pinned department × shift board walks through how it was found as you scroll (every team → near the plant average → one row → one cell). Below it are the changes worth a conversation, the data-quality gate with a "let the bad day through" switch and a "send a broken extract" demo, and the stack. Drill-downs live under Explore, and every number opens the SQL that produced it.
+
+**How it stays fast:** the whole backend (PGlite, Prisma, the tRPC router) runs in a Web Worker, so the page never blocks while PostgreSQL boots, and the first screen is served from a build-time snapshot of the same seeded queries (`server/snapshot.ts`). Lighthouse (desktop, local build): performance 100, accessibility 100, best practices 100, total blocking time 30 ms, down from 13.8 s before the worker.
 
 ---
 

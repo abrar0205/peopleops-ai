@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
-import { bootBackend, type Backend, type BootStep } from '../browser/boot'
-import type { ApiContext } from '../api/context'
+import type { BootStep } from '../browser/boot'
+import { startWorker, type WorkerBackend } from '../browser/workerClient'
 import type { Snapshot } from '../api/snapshot'
 import { Intro, PHASES, phaseOf } from './Intro'
 import { makeClient, TRPCProvider, useTRPC } from '../browser/trpc'
@@ -18,13 +18,16 @@ import { Method } from './pages/Method'
 
 export const REPO_URL = 'https://github.com/abrar0205/peopleops-ai'
 interface Runtime {
-  backend: Backend | null
+  /** Set once the worker's database is live. */
+  backend: WorkerBackend | null
   steps: BootStep[]
   rerun: () => Promise<void>
   rerunning: boolean
   notify: (msg: string) => void
+  /** Show the pipeline intro again. */
+  replayIntro: () => void
 }
-const RuntimeCtx = createContext<Runtime>({ backend: null, steps: [], rerun: async () => {}, rerunning: false, notify: () => {} })
+const RuntimeCtx = createContext<Runtime>({ backend: null, steps: [], rerun: async () => {}, rerunning: false, notify: () => {}, replayIntro: () => {} })
 export const useRuntime = () => useContext(RuntimeCtx)
 
 /** Nav badge: the real database boot, step by step, then "Live". */
@@ -44,11 +47,11 @@ function EngineBadge() {
 }
 
 const NAV = [
-  { page: 'overview', label: 'Brief' },
-  { page: 'attendance', label: 'Explore' },
-  { page: 'quality', label: 'Data quality' },
-  { page: 'ask', label: 'Ask' },
-  { page: 'method', label: 'How it works' },
+  { page: 'overview', label: 'Brief', short: 'Brief' },
+  { page: 'attendance', label: 'Explore', short: 'Explore' },
+  { page: 'quality', label: 'Data quality', short: 'Quality' },
+  { page: 'ask', label: 'Ask', short: 'Ask' },
+  { page: 'method', label: 'How it works', short: 'Method' },
 ]
 const EXPLORE = [
   { page: 'attendance', label: 'Attendance' },
@@ -90,7 +93,7 @@ function Shell() {
           </a>
           <nav aria-label="Primary">
             {NAV.map(i => (
-              <a key={i.page} href={href(i.page)} className={section === i.page ? 'on' : ''} aria-current={section === i.page ? 'page' : undefined}>{i.label}</a>
+              <a key={i.page} href={href(i.page)} className={section === i.page ? 'on' : ''} aria-current={section === i.page ? 'page' : undefined}><span className="l-full">{i.label}</span><span className="l-short" aria-hidden="true">{i.short}</span></a>
             ))}
           </nav>
           <EngineBadge />
@@ -126,17 +129,9 @@ function Shell() {
   )
 }
 
-function deferred<T>() {
-  let resolve!: (v: T) => void
-  let reject!: (e: unknown) => void
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
-  promise.catch(() => {})
-  return { promise, resolve, reject }
-}
-
-function Providers({ ctx, children }: { ctx: Promise<ApiContext> | null; children: ReactNode }) {
+function Providers({ worker, children }: { worker: WorkerBackend | null; children: ReactNode }) {
   const queryClient = useMemo(() => new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false, refetchOnWindowFocus: false } } }), [])
-  const client = useMemo(() => makeClient(ctx), [ctx])
+  const client = useMemo(() => makeClient(worker), [worker])
   return (
     <QueryClientProvider client={queryClient}>
       <TRPCProvider trpcClient={client} queryClient={queryClient}>{children}</TRPCProvider>
@@ -160,7 +155,7 @@ function SnapshotSeed({ snapshot, children }: { snapshot: Snapshot | null; child
   return <>{children}</>
 }
 
-function RuntimeProvider({ backend, steps, children }: { backend: Backend | null; steps: BootStep[]; children: ReactNode }) {
+function RuntimeProvider({ backend, steps, replayIntro, children }: { backend: WorkerBackend | null; steps: BootStep[]; replayIntro: () => void; children: ReactNode }) {
   const queryClient = useQueryClient()
   const [rerunning, setRerunning] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
@@ -177,7 +172,7 @@ function RuntimeProvider({ backend, steps, children }: { backend: Backend | null
     }
   }, [backend, queryClient])
   return (
-    <RuntimeCtx.Provider value={{ backend, steps, rerun, rerunning, notify }}>
+    <RuntimeCtx.Provider value={{ backend, steps, rerun, rerunning, notify, replayIntro }}>
       {children}
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </RuntimeCtx.Provider>
@@ -186,25 +181,22 @@ function RuntimeProvider({ backend, steps, children }: { backend: Backend | null
 
 const INTRO_KEY = 'peopleops-intro-seen'
 const seenIntro = () => { try { return localStorage.getItem(INTRO_KEY) === '1' } catch { return false } }
-const nextPaint = () => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 0))))
 
 /*
- * Load order matters because PGlite runs on the main thread and blocks it in
- * multi-second chunks. So: fetch the build-time snapshot, render the brief
- * behind the intro, and only then boot the database. The intro fades out on a
- * CSS timer (--intro), which keeps running while the main thread is busy.
+ * The database runs in a Web Worker, so it never blocks the page. The brief
+ * renders straight from the build-time snapshot while the worker boots; the
+ * intro fades out on a CSS timer (--intro).
  */
 export default function App() {
   const remote = Boolean(import.meta.env.VITE_API_URL)
   const [steps, setSteps] = useState<BootStep[]>([])
-  const [backend, setBackend] = useState<Backend | null>(null)
+  const [backend, setBackend] = useState<WorkerBackend | null>(null)
   const [error, setError] = useState<unknown>(null)
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [snapshotDone, setSnapshotDone] = useState(remote)
   const [intro, setIntro] = useState<'show' | 'leaving' | 'gone'>(remote ? 'gone' : 'show')
-  const boot = useMemo(() => (remote ? null : deferred<Backend>()), [remote])
-  const ctx = useMemo(() => (boot ? boot.promise.then(b => b.ctx) : null), [boot])
-  const started = useRef(false)
+  const [replay, setReplay] = useState(0)
+  const worker = useMemo(() => (remote ? null : startWorker(setSteps)), [remote])
 
   useEffect(() => {
     document.documentElement.style.setProperty('--intro', remote ? '0s' : seenIntro() ? '0.9s' : '4.6s')
@@ -212,17 +204,13 @@ export default function App() {
   }, [remote])
 
   useEffect(() => {
-    if (!boot || started.current) return
-    started.current = true
-    const startDb = () => bootBackend(setSteps).then(
-      b => { setBackend(b); boot.resolve(b) },
-      e => { setError(e); boot.reject(e) },
-    )
+    if (!worker) return
+    worker.ready.then(() => setBackend(worker), setError)
     fetch(`${import.meta.env.BASE_URL}snapshot.json`)
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((s: Snapshot) => setSnapshot(s), () => {})
-      .finally(() => { setSnapshotDone(true); void nextPaint().then(startDb) })
-  }, [boot])
+      .finally(() => setSnapshotDone(true))
+  }, [worker])
 
   const fromSnapshot = snapshotDone && Boolean(snapshot)
   const canOpen = remote || Boolean(backend) || fromSnapshot
@@ -234,8 +222,8 @@ export default function App() {
   useEffect(() => { if (intro === 'show' && backend && !fromSnapshot) close() }, [intro, backend, fromSnapshot, close])
 
   return (
-    <Providers ctx={ctx}>
-      <RuntimeProvider backend={backend} steps={steps}>
+    <Providers worker={worker}>
+      <RuntimeProvider backend={backend} steps={steps} replayIntro={() => { setReplay(r => r + 1); setIntro('show') }}>
         {canOpen && (
           <SnapshotSeed snapshot={snapshot}>
             <EvidenceProvider render={(req, close) => (req ? <EvidenceDrawer {...req} onClose={close} /> : null)}>
@@ -245,12 +233,14 @@ export default function App() {
         )}
         {intro !== 'gone' && (
           <Intro
+            key={replay}
+            replay={replay > 0}
             steps={steps}
             snapshot={snapshot}
-            auto={fromSnapshot}
+            auto={fromSnapshot || replay > 0}
             leaving={intro === 'leaving'}
             error={error}
-            onSkip={() => { if (canOpen) close() }}
+            onSkip={() => { if (canOpen || replay > 0) close() }}
             onDone={() => setIntro('gone')}
           />
         )}

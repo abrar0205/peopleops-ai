@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useTRPC } from '../../browser/trpc'
 import { departmentName, groupLabel } from '../../api/queries'
-import { Card, EvidenceButton, PageHead, Segmented, Select, Skeleton, fmt, fmtMonth, setParams } from '../common'
+import { Card, EvidenceButton, PageHead, Segmented, Select, Skeleton, Takeaway, fmt, fmtMonth, setParams } from '../common'
 import { BarList, Heatmap, LineChart } from '../charts'
 import { SHIFT_OPTIONS, readFilters, useDepartmentOptions } from './Attendance'
 
@@ -20,6 +20,15 @@ export function Attrition({ params }: { params: URLSearchParams }) {
   const plantNow = byDept.data?.rows.find(r => r.department_code === 'ALL')
   const earlyPlant = early.data?.rows.find(r => r.department_code === 'ALL' && r.shift === 'ALL')
 
+  const takeaway = (() => {
+    const rows = trend.data?.rows.filter(r => r.attrition_rate != null) ?? []
+    if (rows.length < 4) return trend.data ? `${label.replace(' · ', ' ')}: too few people in this group to report attrition.` : null
+    const now = rows.at(-1)!, then = rows.at(-4)!
+    const d = now.attrition_rate! - then.attrition_rate!
+    const vol = now.voluntary_attrition_rate != null ? ` Resignations alone account for ${fmt(now.voluntary_attrition_rate)}%.` : ''
+    return `${label.replace(' · ', ' ')} trailing-12-month attrition is ${fmt(now.attrition_rate!)}%, ${Math.abs(d) < 0.2 ? 'about level' : d > 0 ? `up ${fmt(d)} points` : `down ${fmt(-d)} points`} on three months ago.${vol}`
+  })()
+
   return (
     <>
       <PageHead
@@ -34,6 +43,7 @@ export function Attrition({ params }: { params: URLSearchParams }) {
       >
         Trailing-12-month attrition includes resignations, dismissals and fixed-term contract ends. Check how people left before treating a high rate as a retention problem.
       </PageHead>
+      <Takeaway>{takeaway}</Takeaway>
 
       <div className="grid-main">
         <Card

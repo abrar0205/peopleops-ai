@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { BarList, type BarItem } from '../charts'
+import { departmentName } from '../../api/queries'
 import { useTRPCClient } from '../../browser/trpc'
 import type { Evidence } from '../../api/context'
 import { EvidenceButton, Icon, PageHead } from '../common'
@@ -21,6 +23,72 @@ const STARTERS = [
   'Which training programs are effective?',
   'Can I trust the data?',
 ]
+
+/** Reveal text a few words at a time, so an answer reads as it arrives. */
+function useTyped(text: string | undefined) {
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    if (!text) return
+    const words = text.split(/(\s+)/)
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setN(words.length); return }
+    setN(0)
+    const step = Math.max(2, Math.ceil(words.length / 40))
+    const t = setInterval(() => setN(v => { if (v >= words.length) { clearInterval(t); return v } return v + step }), 22)
+    return () => clearInterval(t)
+  }, [text])
+  if (!text) return ''
+  return text.split(/(\s+)/).slice(0, n).join('')
+}
+
+/** The figure an answer leads with: its first percentage, or failing that its first number with a unit. */
+function headline(text: string) {
+  const m = text.match(/-?\d[\d,]*(?:\.\d+)?\s?%/) ?? text.match(/-?\d[\d,]*(?:\.\d+)?\s?(?:h\/week|pts|h)\b/)
+  return m?.[0]?.replace(/\s/g, '') ?? null
+}
+
+/** A small bar chart from the answer's evidence, when it has one label column and one rate. */
+function evidenceBars(evidence: Evidence[] | undefined): { items: BarItem[]; unit: string; title: string } | null {
+  const rows = evidence?.[0]?.rows as Record<string, unknown>[] | undefined
+  if (!rows || rows.length < 2 || rows.length > 12) return null
+  const cols = Object.keys(rows[0])
+  const num = cols.find(c => /rate|pct|share|uplift/.test(c) && rows.every(r => r[c] == null || typeof r[c] === 'number')) ?? null
+  if (!num) return null
+  const labels = cols.filter(c => typeof rows[0][c] === 'string' && !/date|week|month|sql/.test(c))
+  if (!labels.length) return null
+  const label = (r: Record<string, unknown>) => labels.map(c => {
+    const v = String(r[c])
+    if (c === 'department_code') return v === 'ALL' ? 'Plant' : departmentName(v)
+    if (c === 'shift') return v === 'ALL' ? '' : v[0] + v.slice(1).toLowerCase()
+    return v
+  }).filter(Boolean).join(', ') || 'Plant'
+  const values = rows.map(r => (r[num] as number | null) ?? null)
+  const max = Math.max(...values.filter((v): v is number => v != null))
+  return {
+    unit: /uplift/.test(num) ? ' pts' : '%',
+    title: num.replace(/_/g, ' '),
+    items: rows.map((r, i) => ({ key: String(i), label: label(r), value: values[i], focus: values[i] === max })),
+  }
+}
+
+function AnswerBody({ text, evidence, refusal }: { text: string; evidence?: Evidence[]; refusal: boolean }) {
+  const typed = useTyped(text)
+  const done = typed.length >= text.length
+  const bars = refusal ? null : evidenceBars(evidence)
+  // With a chart, the chart carries the answer; otherwise lead with the figure.
+  const big = refusal || bars ? null : headline(text)
+  return (
+    <div className={`answer-card${refusal ? ' refusal' : ''}`}>
+      {big && <div className="answer-big">{big}</div>}
+      <div className="answer">{typed}{!done && <span className="caret" aria-hidden="true" />}</div>
+      {done && bars && (
+        <div className="answer-chart">
+          <span>{bars.title}</span>
+          <BarList ariaLabel={bars.title} items={bars.items} unit={bars.unit} />
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function Ask({ params }: { params: URLSearchParams }) {
   const client = useTRPCClient()
@@ -110,7 +178,7 @@ export function Ask({ params }: { params: URLSearchParams }) {
                 <div className="msg-bot insight-answer">
                   {t.pending && <span className="muted"><span className="spinner" style={{ display: 'inline-block', verticalAlign: '-2px', marginRight: 8 }} />Checking approved metrics…</span>}
                   {t.error && <p className="error">{t.error}</p>}
-                  {t.text && <div className="answer">{t.text}</div>}
+                  {t.text && <AnswerBody text={t.text} evidence={t.evidence} refusal={t.kind === 'refusal'} />}
                   {!t.pending && !t.error && (
                     <div className="insight-meta">
                       <span className={`badge ${t.kind === 'refusal' ? 'warn' : 'good'}`}>{t.kind === 'refusal' ? 'Privacy guardrail' : 'Metric-grounded'}</span>

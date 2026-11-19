@@ -24,11 +24,14 @@ export interface Backend {
   run: RunSummary
   bootMs: number
   rerun(onStep?: (s: string) => void): Promise<RunSummary>
+  /** Rerun the pipeline on a copy of the extracts with extra defective rows appended. */
+  rerunWith(extracts: Extracts): Promise<RunSummary>
 }
 
 const migrations = import.meta.glob('/prisma/migrations/*/migration.sql', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
 
-const repaint = () => new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 0)))
+/** Yield between steps: a frame in a window (so progress can paint), a macrotask in a worker. */
+const repaint = () => new Promise<void>(r => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(() => setTimeout(r, 0)) : setTimeout(r, 0)))
 
 export async function bootBackend(onStep: (steps: BootStep[]) => void): Promise<Backend> {
   const steps: BootStep[] = []
@@ -72,5 +75,6 @@ export async function bootBackend(onStep: (steps: BootStep[]) => void): Promise<
     run,
     bootMs: Math.round(performance.now() - t0),
     rerun: async onStepRerun => runPipeline(db, extracts, async s => { onStepRerun?.(s); await repaint() }),
+    rerunWith: async changed => runPipeline(db, changed),
   }
 }

@@ -129,6 +129,17 @@ export function attendanceWeekly(ctx: ApiContext, department: string, shift: str
     ORDER BY week_start`, [department, shift])
 }
 
+/** Weekly unplanned absence for every department × shift and the plant, last 26 weeks (board sparklines). */
+export function boardTrends(ctx: ApiContext) {
+  return ctx.analytics<{ department_code: string; shift: string; week_start: string; unplanned_absence_rate: number | null; employees: number }>(`
+    SELECT department_code, shift, week_start::text, unplanned_absence_rate, employees
+    FROM attendance_weekly
+    WHERE NOT suppressed
+      AND ((department_code <> 'ALL' AND shift IN ('EARLY', 'LATE', 'NIGHT')) OR (department_code = 'ALL' AND shift = 'ALL'))
+      AND week_start > (SELECT max(week_start) FROM attendance_weekly) - 7 * 26
+    ORDER BY department_code, shift, week_start`)
+}
+
 export type AttendanceMetric = 'unplanned_absence' | 'overtime'
 
 /** Absence or overtime per group over the last N complete weeks. */

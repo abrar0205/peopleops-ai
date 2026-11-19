@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { BootStep } from '../browser/boot'
 import type { Snapshot } from '../api/snapshot'
 import { fmtInt } from './common'
@@ -37,7 +38,9 @@ const BOARD = [
   [0.25, 0.2, -1], [0.18, 0.18, 0.1], [0.38, 0.28, 0.72],
 ]
 
-export function Intro({ steps, snapshot, auto, leaving, onSkip, onDone, error }: {
+export function Intro({ steps, snapshot, auto, leaving, onSkip, onDone, error, replay = false }: {
+  /** Replaying from the page: the phases play through on a timer instead of following the boot. */
+  replay?: boolean
   steps: BootStep[]
   snapshot: Snapshot | null
   /** Fade out on the CSS --intro timer (the brief is ready behind it). */
@@ -47,20 +50,28 @@ export function Intro({ steps, snapshot, auto, leaving, onSkip, onDone, error }:
   onDone: () => void
   error?: unknown
 }) {
-  const { idx, ready } = phaseOf(steps)
+  const live = phaseOf(steps)
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (!replay) return
+    const t = setInterval(() => setTick(v => Math.min(v + 1, PHASES.length)), 1100)
+    return () => clearInterval(t)
+  }, [replay])
+  const idx = replay ? Math.min(tick, PHASES.length - 1) : live.idx
+  const ready = replay ? tick >= PHASES.length : live.ready
   // Same figure as the brief's data-quality section: rows held back across all sources.
   const health = snapshot?.entries.find(e => e.path === 'quality.overview')?.data as { health: { rows: { held_back: number }[] } } | undefined
   const held = health ? health.health.rows.reduce((s, r) => s + r.held_back, 0) : null
 
   return (
-    <div className={`intro${auto ? ' auto' : ''}${leaving ? ' leaving' : ''}`} role="dialog" aria-label="PeopleOps is starting" onAnimationEnd={e => { if (e.target === e.currentTarget) onDone() }}>
+    <div style={replay ? ({ '--intro': '5.2s' } as React.CSSProperties) : undefined} className={`intro${auto ? ' auto' : ''}${leaving ? ' leaving' : ''}`} role="dialog" aria-label="PeopleOps is starting" onAnimationEnd={e => { if (e.target === e.currentTarget) onDone() }}>
       <div className="intro-inner">
         <header className="intro-top">
           <span className="logo">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="6" height="6" /><rect x="9" y="2" width="6" height="6" /><rect x="16" y="2" width="6" height="6" /><rect x="2" y="9" width="6" height="6" /><rect x="9" y="9" width="6" height="6" className="hot" /><rect x="16" y="9" width="6" height="6" /><rect x="2" y="16" width="6" height="6" /><rect x="9" y="16" width="6" height="6" /><rect x="16" y="16" width="6" height="6" /></svg>
             <span>PeopleOps</span>
           </span>
-          {snapshot && <button className="intro-skip" onClick={onSkip}>Open the brief</button>}
+          {(snapshot || replay) && <button className="intro-skip" onClick={onSkip}>{replay ? 'Close' : 'Open the brief'}</button>}
         </header>
 
         <div className="intro-copy">
