@@ -4,6 +4,8 @@
 
 **Live demo:** https://abrar0205.github.io/peopleops-ai/
 
+![The weekly people brief: a shift board flags Logistics night shift](docs/overview.png)
+
 PeopleOps combines a real analytical backend with a deliberately simple front end. The public demo answers three questions first:
 
 1. **What changed?** — headline workforce KPIs and statistically detected signals.
@@ -24,7 +26,7 @@ All data is synthetic. No employee-level prediction or scoring is used.
 - Evidence links from dashboard metrics back to the SQL that produced them.
 - Privacy controls that suppress groups smaller than 10.
 
-The interface is intentionally compact. Deeper engineering details remain available in the repository and the Technical section of the demo.
+The home page reads as a one-page weekly brief: a headline generated from the strongest signal, a department × shift board, the changes worth a conversation, the data-quality gate and the stack. Drill-downs live under Explore, and every number opens the SQL that produced it.
 
 ---
 

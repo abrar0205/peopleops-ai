@@ -4,7 +4,7 @@ import { bootBackend, type Backend, type BootStep } from '../browser/boot'
 import { makeClient, TRPCProvider, useTRPC } from '../browser/trpc'
 import { EvidenceProvider, Icon, Toast, fmtDate, href, useRoute } from './common'
 import { EvidenceDrawer } from './Evidence'
-import { Overview } from './pages/Overview'
+import { Brief } from './pages/Brief'
 import { Attendance } from './pages/Attendance'
 import { Attrition } from './pages/Attrition'
 import { Training } from './pages/Training'
@@ -44,12 +44,19 @@ function BootScreen({ steps, error }: { steps: BootStep[]; error?: unknown }) {
   )
 }
 
-const PRIMARY_NAV = [
-  { page: 'overview', label: 'Dashboard', icon: 'overview' },
-  { page: 'quality', label: 'Data quality', icon: 'quality' },
-  { page: 'ask', label: 'Insights', icon: 'ask' },
-  { page: 'method', label: 'Technical', icon: 'method' },
+const NAV = [
+  { page: 'overview', label: 'Brief' },
+  { page: 'attendance', label: 'Explore' },
+  { page: 'quality', label: 'Data quality' },
+  { page: 'ask', label: 'Ask' },
+  { page: 'method', label: 'How it works' },
 ]
+const EXPLORE = [
+  { page: 'attendance', label: 'Attendance' },
+  { page: 'attrition', label: 'Attrition' },
+  { page: 'training', label: 'Training' },
+]
+const SECTION_OF: Record<string, string> = { attendance: 'attendance', attrition: 'attendance', training: 'attendance', sql: 'method' }
 
 function Shell() {
   const route = useRoute()
@@ -64,54 +71,57 @@ function Shell() {
       case 'ask': return <Ask params={route.params} />
       case 'sql': return <SqlLab />
       case 'method': return <Method />
-      default: return <Overview />
+      default: return <Brief />
     }
   })()
 
-  const primaryPage = ['overview', 'quality', 'ask', 'method'].includes(route.page) ? route.page : 'overview'
+  const known = ['overview', ...Object.keys(SECTION_OF), 'quality', 'ask', 'method']
+  const current = known.includes(route.page) ? route.page : 'overview'
+  const section = SECTION_OF[current] ?? current
+  const exploring = section === 'attendance'
 
   return (
-    <div className="shell shell-simple">
-      <aside className="sidebar sidebar-simple">
-        <a className="brand" href={href('overview')}>
-          <span className="brand-mark">P</span>
-          <span className="brand-text"><strong>PeopleOps</strong><span>workforce intelligence</span></span>
-        </a>
-        <nav aria-label="Primary navigation">
-          {PRIMARY_NAV.map(i => (
-            <a key={i.page} href={href(i.page)} className={`nav-link ${primaryPage === i.page ? 'active' : ''}`} aria-current={primaryPage === i.page ? 'page' : undefined}>
-              <Icon name={i.icon} />
-              {i.label}
-            </a>
-          ))}
-        </nav>
-        <div className="sidebar-foot sidebar-foot-simple">
-          <div className="synthetic-note"><span className="live-dot" /><span>Synthetic manufacturing data</span></div>
-          <a href={REPO_URL} target="_blank" rel="noreferrer"><Icon name="github" /> Source code</a>
-        </div>
-      </aside>
-
-      <div className="main">
-        <header className="topbar topbar-simple">
-          <div className="topbar-context">
-            <strong>People Analytics</strong>
-            {status.data && <span>Snapshot · {fmtDate(status.data.asOf, { month: 'short', year: 'numeric' })}</span>}
-          </div>
-          <span className="spacer" />
-          <span className="demo-status"><span className="live-dot" /> Interactive demo</span>
-          <a className="btn small ghost" href={REPO_URL} target="_blank" rel="noreferrer" aria-label="Source on GitHub"><Icon name="github" /></a>
-        </header>
-        <main className="content content-simple">{page}</main>
-      </div>
-
-      <nav className="mobile-nav mobile-nav-simple" aria-label="Pages">
-        {PRIMARY_NAV.map(i => (
-          <a key={i.page} href={href(i.page)} className={primaryPage === i.page ? 'active' : ''}>
-            <Icon name={i.icon} />
-            {i.label === 'Data quality' ? 'Quality' : i.label}
+    <div className="app">
+      <a className="skip" href="#content">Skip to content</a>
+      <header className="nav">
+        <div className="nav-inner">
+          <a className="logo" href={href('overview')} aria-label="PeopleOps home">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="6" height="6" /><rect x="9" y="2" width="6" height="6" /><rect x="16" y="2" width="6" height="6" /><rect x="2" y="9" width="6" height="6" /><rect x="9" y="9" width="6" height="6" className="hot" /><rect x="16" y="9" width="6" height="6" /><rect x="2" y="16" width="6" height="6" /><rect x="9" y="16" width="6" height="6" /><rect x="16" y="16" width="6" height="6" /></svg>
+            <span>PeopleOps</span>
           </a>
-        ))}
-      </nav>
+          <nav aria-label="Primary">
+            {NAV.map(i => (
+              <a key={i.page} href={href(i.page)} className={section === i.page ? 'on' : ''} aria-current={section === i.page ? 'page' : undefined}>{i.label}</a>
+            ))}
+          </nav>
+          <a className="nav-gh" href={REPO_URL} target="_blank" rel="noreferrer" aria-label="Source on GitHub"><Icon name="github" /><span>GitHub</span></a>
+        </div>
+      </header>
+
+      {exploring && (
+        <div className="subnav">
+          <nav className="subnav-inner" aria-label="Explore">
+            {EXPLORE.map(i => (
+              <a key={i.page} href={href(i.page)} className={current === i.page ? 'on' : ''} aria-current={current === i.page ? 'page' : undefined}>{i.label}</a>
+            ))}
+          </nav>
+        </div>
+      )}
+
+      <main id="content" className={current === 'overview' ? 'page page-brief' : 'page'}>{page}</main>
+
+      <footer className="foot">
+        <div className="foot-inner">
+          <p>
+            PeopleOps is a portfolio project by Abrar Assan Mohamed. All data is synthetic{status.data ? `, generated for a snapshot dated ${fmtDate(status.data.asOf, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}.
+            Figures are aggregates only, groups under 10 people are hidden, and nothing scores individual employees.
+          </p>
+          <div className="foot-links">
+            <a href={href('method')}>Method and privacy</a>
+            <a href={REPO_URL} target="_blank" rel="noreferrer">Source code</a>
+          </div>
+        </div>
+      </footer>
     </div>
   )
 }

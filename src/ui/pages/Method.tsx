@@ -20,7 +20,7 @@ function Architecture() {
         </marker>
       </defs>
       <rect className="zone" x={4} y={4} width={912} height={292} rx={12} />
-      <text className="zone-label" x={18} y={24}>POSTGRESQL (PGLITE IN THE BROWSER · POSTGRES 16+ IN SERVER MODE)</text>
+      <text className="zone-label" x={18} y={24}>PostgreSQL: PGlite in the browser, Postgres 16+ on the server</text>
       {box(18, 44, 150, 'Source extracts', 'HRIS · time clock · LMS')}
       {box(200, 44, 150, 'staging.*', 'landed as delivered')}
       {box(382, 44, 150, '18 quality rules', 'SQL · reject log')}

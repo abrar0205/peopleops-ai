@@ -20,13 +20,13 @@ export function Quality({ params: _params }: { params: URLSearchParams }) {
 
   return (
     <>
-      <PageHead eyebrow="Data quality" title="Know what you can trust">
-        A concise view of the checks that protect the workforce KPIs. Invalid source records are held back before they can influence a dashboard metric.
+      <PageHead eyebrow="Data quality" title="What gets checked before a number is shown">
+        Every source row passes 18 SQL checks. Rows that fail are held back with a reason, so a bad extract can never quietly change a KPI.
       </PageHead>
 
       <section className="quality-summary-clean">
         <article className="quality-score-clean">
-          <span>DATA REACHING KPIs</span>
+          <span>Source rows reaching the numbers</span>
           <strong>{overview.data ? `${fmt(usablePct)}%` : '—'}</strong>
           <p>{overview.data ? `${fmtInt(totalHeld)} of ${fmtInt(totalReceived)} source rows held back` : 'Checking source health…'}</p>
         </article>
@@ -43,9 +43,9 @@ export function Quality({ params: _params }: { params: URLSearchParams }) {
         <section className="quality-story-clean">
           <div className="quality-story-icon"><Icon name="quality" /></div>
           <div>
-            <span className="section-kicker-clean">EXAMPLE · WHY QUALITY CHANGES THE ANSWER</span>
+            <span>Why this matters</span>
             <h2>{fmtDate(punch.sourceKey, { weekday: 'long', day: 'numeric', month: 'long' })}: attendance data was incomplete.</h2>
-            <p>{punch.detail} The affected day is excluded from KPI calculations instead of being silently interpreted as employee absence.</p>
+            <p>{punch.detail.replace(/\.?\s*$/, '.')} The affected day is excluded from KPI calculations instead of being silently interpreted as employee absence.</p>
           </div>
         </section>
       )}
@@ -70,7 +70,7 @@ export function Quality({ params: _params }: { params: URLSearchParams }) {
         </Card>
 
         <aside className="quality-process-clean">
-          <span className="section-kicker-clean">QUALITY GATE</span>
+          <span>Quality gate</span>
           <h2>Four steps before a metric is trusted.</h2>
           <div className="quality-steps-clean">
             <div><span>01</span><strong>Land</strong><p>Source extracts arrive in staging unchanged.</p></div>

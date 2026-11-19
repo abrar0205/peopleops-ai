@@ -70,15 +70,14 @@ export function Ask({ params }: { params: URLSearchParams }) {
 
   return (
     <>
-      <PageHead eyebrow="Insights" title="Ask a workforce question">
-        The assistant answers only from approved aggregate metrics and keeps the supporting query evidence available. Individual employee prediction is intentionally out of scope.
+      <PageHead eyebrow="Ask" title="Ask a workforce question">
+        Answers come from approved aggregate queries, and each one links to the SQL behind it. Questions about individual employees are declined.
       </PageHead>
 
       <section className="insight-shell">
         <aside className="insight-starters">
-          <span className="section-kicker-clean">START WITH A BUSINESS QUESTION</span>
-          <h2>Ask what changed, where, and why it matters.</h2>
-          <p>No API key is required. The public demo uses a deterministic routing layer over approved analytical queries.</p>
+          <h2>Start with a question a manager would ask</h2>
+          <p>The demo routes each question to an approved aggregate query, so it needs no API key and every answer shows its SQL.</p>
           <div className="insight-suggestions">
             {STARTERS.map(s => (
               <button key={s} onClick={() => void ask(s)}>{s}<Icon name="arrow" /></button>
@@ -92,16 +91,16 @@ export function Ask({ params }: { params: URLSearchParams }) {
 
         <div className="insight-chat">
           <div className="insight-chat-head">
-            <div><span className="live-dot" /><strong>People Insight Assistant</strong></div>
-            <span>Grounded demo</span>
+            <div><span className="live-dot" /><strong>Workforce assistant</strong></div>
+            <span>Answers from aggregate data only</span>
           </div>
 
           <div className="insight-messages" aria-live="polite">
             {turns.length === 0 && (
               <div className="insight-empty">
                 <Icon name="ask" size={26} />
-                <strong>Ask the data, not a dashboard.</strong>
-                <p>Choose a question on the left or type your own below.</p>
+                <strong>No questions yet</strong>
+                <p>Pick a question or type your own below.</p>
               </div>
             )}
 
