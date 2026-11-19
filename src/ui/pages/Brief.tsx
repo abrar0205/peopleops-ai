@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRuntime } from '../App'
+import { CountUp } from '../motion'
 import type { InjectInfo } from '../../browser/protocol'
 import { useTRPC } from '../../browser/trpc'
 import type { KpiTile } from '../../api/queries'
@@ -152,7 +153,7 @@ function ShiftBoard({ flagged, focus, mode = 'brief' }: { flagged: Set<string>; 
         {ref.data.departments.map((d, r) => (
           <div className={`board-row${focus?.dept === d.code ? ' focus-row' : ''}`} role="row" key={d.code} style={{ ['--r' as string]: r }}>
             <span className="board-dept" role="rowheader">{d.name}</span>
-            {SHIFTS.map(sh => {
+            {SHIFTS.map((sh, ci) => {
               const c = cellOf(d.code, sh.key)
               if (!c || c.suppressed || c.unplanned_absence_rate == null)
                 return <span key={sh.key} role="cell" className="board-cell hidden" title="Fewer than 10 people, hidden">&lt;10</span>
@@ -171,7 +172,7 @@ function ShiftBoard({ flagged, focus, mode = 'brief' }: { flagged: Set<string>; 
                 <a
                   className={cls}
                   href={href('attendance', { dept: d.code, shift: sh.key })}
-                  style={{ ['--t' as string]: t.toFixed(3) }}
+                  style={{ ['--t' as string]: t.toFixed(3), ['--c' as string]: ci }}
                   aria-label={`${d.name}, ${sh.label.toLowerCase()} shift: ${fmt(v)}% unplanned absence, ${c.employees} people. Open attendance.`}
                   onMouseEnter={() => setHover({ dept: d.code, shift: sh.key })}
                   onFocus={() => setHover({ dept: d.code, shift: sh.key })}
@@ -280,7 +281,8 @@ function useActiveStep(list: React.RefObject<HTMLElement | null>, count: number)
         if (e.isIntersecting) setActive(i)
         else if (i === 0 && e.boundingClientRect.top > 0) setActive(-1)
       }
-    }, { rootMargin: '-45% 0px -45% 0px' })
+    // On narrow screens the pinned board covers the top of the viewport, so a step counts once its card is below it.
+    }, { rootMargin: window.innerWidth < 1080 ? '-62% 0px -22% 0px' : '-45% 0px -45% 0px' })
     el.querySelectorAll('[data-step]').forEach(n => io.observe(n))
     return () => io.disconnect()
   }, [list, count])
@@ -289,12 +291,24 @@ function useActiveStep(list: React.RefObject<HTMLElement | null>, count: number)
 
 /* ------------------------------------------------------------------ sections */
 
+/** Weekly series for an attendance signal's team and the plant, from the signal's own evidence. */
+function signalTrend(s: Signal) {
+  if (s.area !== 'attendance' || !s.department || !s.shift) return null
+  const key = s.id.startsWith('overtime') ? 'overtime_hours_per_head' : 'unplanned_absence_rate'
+  const rows = (s.evidence[0]?.rows ?? []) as Record<string, unknown>[]
+  const pick = (d: string, sh: string) => rows.filter(r => r.department_code === d && r.shift === sh).map(r => (r[key] as number | null) ?? null)
+  const values = pick(s.department, s.shift)
+  const plant = pick('ALL', 'ALL')
+  return values.length > 3 && plant.length === values.length ? { values, plant } : null
+}
+
 function Change({ signal }: { signal: Signal }) {
   const { now, ref } = comparison(signal)
   const a = num(now?.value)
   const b = num(ref?.value)
   const max = Math.max(a, b) || 1
   const level = signal.severity === 'high' ? 'act' : 'watch'
+  const trend = signalTrend(signal)
   return (
     <li className={`change ${level}`} data-reveal>
       <span className="change-level">{level === 'act' ? 'Act' : 'Watch'}</span>
@@ -308,6 +322,13 @@ function Change({ signal }: { signal: Signal }) {
         </div>
       </div>
       {!Number.isNaN(a) && !Number.isNaN(b) && (
+        <div className="change-side">
+        {trend && (
+          <div className="change-trend">
+            <Trend values={trend.values} plant={trend.plant} flag={level === 'act'} />
+            <span>Last {trend.values.length} weeks, dashed line is the plant</span>
+          </div>
+        )}
         <dl className="change-compare">
           <div>
             <dt>{now!.label}</dt>
@@ -318,6 +339,7 @@ function Change({ signal }: { signal: Signal }) {
             <dd><strong>{ref!.value}</strong><span className="cbar ref" style={{ width: `${(b / max) * 100}%` }} /></dd>
           </div>
         </dl>
+        </div>
       )}
     </li>
   )
@@ -394,7 +416,7 @@ function Trust() {
   return (
     <div className={`trust${running ? ' running' : ''}`}>
       <div className="trust-score">
-        <strong>{fmt(pct)}%</strong>
+        <strong><CountUp text={`${fmt(pct)}%`} /></strong>
         <p>of source rows pass every check and reach the figures on this page.</p>
         <EvidenceButton title="Data health by source" evidence={[q.data.health]} label="Query" />
       </div>
@@ -403,7 +425,7 @@ function Trust() {
         <ol className="trust-steps">
           {steps.map(s => (
             <li key={s.label}>
-              <strong>{s.n}</strong>
+              <strong><CountUp text={s.n} /></strong>
               <span>{s.label}</span>
               <small>{s.sub}</small>
             </li>
@@ -555,6 +577,15 @@ export function Brief() {
         </div>
         <div className="story-visual">
           <div className="story-sticky">
+            {steps.length > 0 && (
+              <nav className={`step-rail${active >= 0 ? ' on' : ''}`} aria-label="Story steps">
+                {steps.map((st, i) => (
+                  <button key={i} className={i === active ? 'cur' : i < active ? 'past' : ''} aria-label={`Step ${i + 1}: ${st.title}`} aria-current={i === active ? 'step' : undefined}
+                    onClick={() => document.querySelector(`[data-step="${i}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })} />
+                ))}
+                <span>{active >= 0 ? `Step ${active + 1} of ${steps.length}: ${steps[active].title}` : `${steps.length} steps: how the brief found this`}</span>
+              </nav>
+            )}
             <ShiftBoard flagged={flagged} focus={focus} mode={active >= 0 ? steps[active]?.mode ?? 'brief' : 'brief'} />
           </div>
         </div>
@@ -580,7 +611,7 @@ export function Brief() {
               return (
                 <div className="vital" key={t.id} style={{ ['--i' as string]: i }}>
                   <span className="vital-label">{t.label}</span>
-                  <strong>{formatTile(t)}</strong>
+                  <strong><CountUp text={formatTile(t)} /></strong>
                   <span className={`vital-delta ${good == null ? '' : good ? 'good' : 'bad'}`}>
                     {delta != null && delta !== 0 && <>{delta > 0 ? '+' : '−'}{t.unit === 'people' ? fmtInt(Math.abs(delta)) : fmt(Math.abs(delta), 1)}{t.unit === '%' ? ' pts' : ''} </>}
                     {t.comparison}
@@ -621,7 +652,7 @@ export function Brief() {
         <AskBox />
       </section>
 
-      <section className="block">
+      <section className="block block-build">
         <header className="block-head">
           <h2>How it’s built</h2>
           <p>The whole stack runs in this browser tab: PostgreSQL compiled to WebAssembly, Prisma, a tRPC router and React. The same code runs on a Node server against real PostgreSQL, and GitHub Actions tests both.</p>

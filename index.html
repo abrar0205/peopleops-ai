@@ -6,10 +6,22 @@
     <meta name="theme-color" content="#eceeeb" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <meta name="description" content="PeopleOps is an interactive manufacturing workforce analytics demo combining SQL, PostgreSQL, data quality, React and metric-grounded insights." />
+    <script>try{var t=localStorage.getItem('peopleops-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
     <title>PeopleOps · Manufacturing workforce intelligence</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Static first frame: shown before JavaScript arrives, replaced by the live intro. -->
+      <div class="intro splash" id="splash">
+        <div class="intro-inner">
+          <header class="intro-top"><span class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="6" height="6"/><rect x="9" y="2" width="6" height="6"/><rect x="16" y="2" width="6" height="6"/><rect x="2" y="9" width="6" height="6"/><rect x="9" y="9" width="6" height="6" class="hot"/><rect x="16" y="9" width="6" height="6"/><rect x="2" y="16" width="6" height="6"/><rect x="9" y="16" width="6" height="6"/><rect x="16" y="16" width="6" height="6"/></svg><span>PeopleOps</span></span></header>
+          <div class="intro-copy">
+            <h1>Raw workforce data in. A brief a plant manager can trust out.</h1>
+            <p>PeopleOps checks every HR, time-clock and training record, holds back the bad ones, and turns the rest into a weekly brief. The whole pipeline is starting in your browser right now, on synthetic data.</p>
+          </div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

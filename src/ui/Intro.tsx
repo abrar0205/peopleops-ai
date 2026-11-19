@@ -38,6 +38,9 @@ const BOARD = [
   [0.25, 0.2, -1], [0.18, 0.18, 0.1], [0.38, 0.28, 0.72],
 ]
 
+// If the static HTML splash was on screen, don't replay the entrance: the copy is already there.
+const hadSplash = typeof document !== 'undefined' && Boolean(document.getElementById('splash'))
+
 export function Intro({ steps, snapshot, auto, leaving, onSkip, onDone, error, replay = false }: {
   /** Replaying from the page: the phases play through on a timer instead of following the boot. */
   replay?: boolean
@@ -64,7 +67,7 @@ export function Intro({ steps, snapshot, auto, leaving, onSkip, onDone, error, r
   const held = health ? health.health.rows.reduce((s, r) => s + r.held_back, 0) : null
 
   return (
-    <div style={replay ? ({ '--intro': '5.2s' } as React.CSSProperties) : undefined} className={`intro${auto ? ' auto' : ''}${leaving ? ' leaving' : ''}`} role="dialog" aria-label="PeopleOps is starting" onAnimationEnd={e => { if (e.target === e.currentTarget) onDone() }}>
+    <div style={replay ? ({ '--intro': '5.2s' } as React.CSSProperties) : undefined} className={`intro${auto ? ' auto' : ''}${leaving ? ' leaving' : ''}${hadSplash && !replay ? ' from-splash' : ''}`} role="dialog" aria-label="PeopleOps is starting" onAnimationEnd={e => { if (e.target === e.currentTarget) onDone() }}>
       <div className="intro-inner">
         <header className="intro-top">
           <span className="logo">

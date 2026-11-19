@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { fmt } from './common'
+import { useTweened } from './motion'
 
 function useWidth<T extends HTMLElement>(fallback = 640) {
   const ref = useRef<T>(null)
@@ -35,7 +36,7 @@ export interface LineSeries {
 }
 
 /** Line chart with a crosshair tooltip. One y-axis, end labels on each series. */
-export function LineChart({ labels, series, unit = '', digits = 1, height = 220, formatX = (s: string) => s, zeroBased = false, band, ariaLabel }: {
+export function LineChart({ labels, series: seriesIn, unit = '', digits = 1, height = 220, formatX = (s: string) => s, zeroBased = false, band, ariaLabel }: {
   labels: string[]
   series: LineSeries[]
   unit?: string
@@ -49,6 +50,9 @@ export function LineChart({ labels, series, unit = '', digits = 1, height = 220,
 }) {
   const [ref, width] = useWidth<HTMLDivElement>()
   const [hover, setHover] = useState<number | null>(null)
+  // Glide between selections instead of jumping.
+  const tweened = useTweened(seriesIn.map(s => s.values))
+  const series = seriesIn.map((s, i) => ({ ...s, values: tweened[i] ?? s.values }))
   const pad = { l: 40, r: 56, t: 12, b: 26 }
   const all = series.flatMap(s => s.values).filter((v): v is number => v != null)
   if (all.length === 0) return <div className="empty">No data for this selection (groups under 10 people are suppressed).</div>

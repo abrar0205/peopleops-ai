@@ -1,9 +1,10 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, startTransition, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { BootStep } from '../browser/boot'
 import { startWorker, type WorkerBackend } from '../browser/workerClient'
 import type { Snapshot } from '../api/snapshot'
 import { Intro, PHASES, phaseOf } from './Intro'
+import { markIntroDone } from './motion'
 import { makeClient, TRPCProvider, useTRPC } from '../browser/trpc'
 import { EvidenceProvider, Icon, Toast, fmtDate, href, useRoute } from './common'
 import { EvidenceDrawer } from './Evidence'
@@ -49,16 +50,42 @@ function EngineBadge() {
 const NAV = [
   { page: 'overview', label: 'Brief', short: 'Brief' },
   { page: 'attendance', label: 'Explore', short: 'Explore' },
-  { page: 'quality', label: 'Data quality', short: 'Quality' },
   { page: 'ask', label: 'Ask', short: 'Ask' },
-  { page: 'method', label: 'How it works', short: 'Method' },
 ]
 const EXPLORE = [
   { page: 'attendance', label: 'Attendance' },
   { page: 'attrition', label: 'Attrition' },
   { page: 'training', label: 'Training' },
+  { page: 'quality', label: 'Data quality' },
 ]
-const SECTION_OF: Record<string, string> = { attendance: 'attendance', attrition: 'attendance', training: 'attendance', sql: 'method' }
+// How it works and the SQL console live in the brief's last section and the footer, not the nav.
+const SECTION_OF: Record<string, string> = { attendance: 'attendance', attrition: 'attendance', training: 'attendance', quality: 'attendance', sql: 'method' }
+
+type ViewTransitionDoc = Document & { startViewTransition?: (cb: () => void) => unknown }
+const THEME_KEY = 'peopleops-theme'
+
+/** Light/dark switch. Starts from the device setting; a choice is remembered. */
+function ThemeToggle() {
+  const sys = () => (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => (document.documentElement.dataset.theme as 'light' | 'dark' | undefined) ?? sys())
+  const flip = () => {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    const apply = () => { document.documentElement.dataset.theme = next; setTheme(next) }
+    try { localStorage.setItem(THEME_KEY, next) } catch { /* storage unavailable */ }
+    const doc = document as ViewTransitionDoc
+    if (doc.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) doc.startViewTransition(apply)
+    else apply()
+  }
+  return (
+    <button className="theme-toggle" onClick={flip} aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} title={theme === 'dark' ? 'Light theme' : 'Dark theme'}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        {theme === 'dark'
+          ? <><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" /></>
+          : <path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z" />}
+      </svg>
+    </button>
+  )
+}
 
 function Shell() {
   const route = useRoute()
@@ -93,10 +120,11 @@ function Shell() {
           </a>
           <nav aria-label="Primary">
             {NAV.map(i => (
-              <a key={i.page} href={href(i.page)} className={section === i.page ? 'on' : ''} aria-current={section === i.page ? 'page' : undefined}><span className="l-full">{i.label}</span><span className="l-short" aria-hidden="true">{i.short}</span></a>
+              <a key={i.page} href={href(i.page)} className={section === i.page ? 'on' : ''} aria-current={section === i.page ? 'page' : undefined}><span className="l-full">{i.label}</span><span className="l-short">{i.short}</span></a>
             ))}
           </nav>
           <EngineBadge />
+          <ThemeToggle />
           <a className="nav-gh" href={REPO_URL} target="_blank" rel="noreferrer" aria-label="Source on GitHub"><Icon name="github" /><span>GitHub</span></a>
         </div>
       </header>
@@ -120,7 +148,8 @@ function Shell() {
             Figures are aggregates only, groups under 10 people are hidden, and nothing scores individual employees.
           </p>
           <div className="foot-links">
-            <a href={href('method')}>Method and privacy</a>
+            <a href={href('method')}>How it works</a>
+            <a href={href('sql')}>SQL console</a>
             <a href={REPO_URL} target="_blank" rel="noreferrer">Source code</a>
           </div>
         </div>
@@ -198,6 +227,9 @@ export default function App() {
   const [replay, setReplay] = useState(0)
   const worker = useMemo(() => (remote ? null : startWorker(setSteps)), [remote])
 
+  useEffect(() => { if (intro === 'gone') markIntroDone() }, [intro])
+  // Safety net in case the intro's animationend never arrives.
+  useEffect(() => { const t = setTimeout(markIntroDone, 6500); return () => clearTimeout(t) }, [])
   useEffect(() => {
     document.documentElement.style.setProperty('--intro', remote ? '0s' : seenIntro() ? '0.9s' : '4.6s')
     try { localStorage.setItem(INTRO_KEY, '1') } catch { /* storage unavailable */ }
@@ -208,8 +240,9 @@ export default function App() {
     worker.ready.then(() => setBackend(worker), setError)
     fetch(`${import.meta.env.BASE_URL}snapshot.json`)
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((s: Snapshot) => setSnapshot(s), () => {})
-      .finally(() => setSnapshotDone(true))
+      // Render the brief behind the intro as interruptible work, so it never freezes the page.
+      .then((s: Snapshot) => startTransition(() => setSnapshot(s)), () => {})
+      .finally(() => startTransition(() => setSnapshotDone(true)))
   }, [worker])
 
   const fromSnapshot = snapshotDone && Boolean(snapshot)
