@@ -22,7 +22,16 @@ const parseHash = (): Route => {
   return { page: path || 'overview', params: new URLSearchParams(query ?? '') }
 }
 
-type ViewTransitionDoc = Document & { startViewTransition?: (cb: () => void) => unknown }
+type VT = { ready: Promise<void>; finished: Promise<void>; updateCallbackDone: Promise<void> }
+type ViewTransitionDoc = Document & { startViewTransition?: (cb: () => void) => VT }
+
+/** Run a DOM update in a view transition; a transition skipped by a newer one is expected, not an error. */
+export function withTransition(apply: () => void) {
+  const doc = document as ViewTransitionDoc
+  if (!doc.startViewTransition || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return apply()
+  const t = doc.startViewTransition(apply)
+  for (const p of [t.ready, t.finished, t.updateCallbackDone]) p.catch(() => {})
+}
 
 /**
  * Hash router. Page changes run inside a view transition where supported, so
@@ -41,9 +50,7 @@ export function useRoute(): Route {
         flushSync(() => setRoute(next))
         if (pageChanged) window.scrollTo({ top: 0 })
       }
-      const doc = document as ViewTransitionDoc
-      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      if (pageChanged && doc.startViewTransition && !reduce) doc.startViewTransition(apply)
+      if (pageChanged) withTransition(apply)
       else apply()
     }
     window.addEventListener('hashchange', on)

@@ -1,9 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRuntime } from '../App'
 import { CountUp } from '../motion'
 import type { InjectInfo } from '../../browser/protocol'
-import { useTRPC } from '../../browser/trpc'
+import { useTRPC, useTRPCClient } from '../../browser/trpc'
+import { askClaude, MODELS } from '../../browser/llm'
+import type { Evidence } from '../../api/context'
+import { Floor, type FloorTeam, type ShiftKey } from '../brief/Floor'
+import { Team, type TeamData } from '../brief/Team'
+import { AnswerBody } from './Ask'
 import type { KpiTile } from '../../api/queries'
 import type { Signal } from '../../api/insights'
 import { departmentName, shiftName } from '../../api/queries'
@@ -90,7 +95,6 @@ export type BoardMode = 'brief' | 'all' | 'outliers' | 'row' | 'cell'
 
 interface Focus { dept: string; shift: string }
 
-const hoverCapable = () => typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches
 
 /** 26-week line for one team against the plant. */
 function Trend({ values, plant, flag }: { values: (number | null)[]; plant: (number | null)[]; flag: boolean }) {
@@ -111,38 +115,27 @@ function Trend({ values, plant, flag }: { values: (number | null)[]; plant: (num
   )
 }
 
-function ShiftBoard({ flagged, focus, mode = 'brief' }: { flagged: Set<string>; focus: Focus | null; mode?: BoardMode }) {
+function ShiftBoard({ flagged, focus, mode = 'brief', selected, onSelect }: {
+  flagged: Set<string>
+  focus: Focus | null
+  mode?: BoardMode
+  selected: Focus | null
+  onSelect: (f: Focus) => void
+}) {
   const trpc = useTRPC()
   const grid = useQuery(trpc.attendance.byGroup.queryOptions({ by: 'department_shift', weeks: 4 }))
   const ref = useQuery(trpc.meta.reference.queryOptions())
-  const trends = useQuery(trpc.attendance.boardTrends.queryOptions())
-  const [hover, setHover] = useState<Focus | null>(null)
-  const [picked, setPicked] = useState<Focus | null>(null)
-  if (!grid.data || !ref.data) return <Skeleton height={420} />
-
+  if (!grid.data || !ref.data) return <Skeleton height={360} />
   const plant = grid.data.rows.find(r => r.department_code === 'ALL' && r.shift === 'ALL')?.unplanned_absence_rate ?? null
   const values = grid.data.rows.filter(r => r.department_code !== 'ALL' && r.shift !== 'ALL' && !r.suppressed && r.unplanned_absence_rate != null).map(r => r.unplanned_absence_rate!)
   const lo = Math.min(...values)
   const hi = Math.max(...values)
   const cellOf = (d: string, sh: string) => grid.data.rows.find(r => r.department_code === d && r.shift === sh)
 
-  // Detail strip: hovered cell, else the one tapped, else the story focus.
-  const shown = (mode === 'cell' ? focus : hover ?? picked ?? focus) ?? null
-  const shownCell = shown ? cellOf(shown.dept, shown.shift) : undefined
-  const deptName = (code: string) => ref.data.departments.find(d => d.code === code)?.name ?? code
-  const series = (d: string, sh: string) => (trends.data?.rows ?? []).filter(r => r.department_code === d && r.shift === sh)
-  const plantSeries = series('ALL', 'ALL')
-  const shownSeries = shown ? series(shown.dept, shown.shift) : []
-  const weekIdx = new Map(plantSeries.map((r, i) => [r.week_start, i]))
-  const aligned = plantSeries.map(() => null as number | null)
-  for (const r of shownSeries) { const i = weekIdx.get(r.week_start); if (i != null) aligned[i] = r.unplanned_absence_rate }
-  const gap = shownCell?.unplanned_absence_rate != null && plant != null ? shownCell.unplanned_absence_rate - plant : null
-  const isFlag = shown ? flagged.has(`${shown.dept}|${shown.shift}`) : false
-
   return (
-    <figure className="board" data-mode={mode} aria-label="Unplanned absence by department and shift, last 4 weeks" onMouseLeave={() => setHover(null)}>
+    <figure className="board" data-mode={mode} aria-label="Unplanned absence by department and shift, last 4 weeks">
       <figcaption className="board-cap">
-        <span>Unplanned absence by shift, last 4 weeks</span>
+        <span>Unplanned absence, last 4 weeks</span>
         <EvidenceButton title="Shift board: department × shift absence" evidence={[grid.data]} label="Query" />
       </figcaption>
       <div className="board-grid" role="table">
@@ -165,66 +158,30 @@ function ShiftBoard({ flagged, focus, mode = 'brief' }: { flagged: Set<string>; 
                 flagged.has(key) ? 'flag' : '',
                 focus && focus.dept === d.code && focus.shift === sh.key ? 'focus' : '',
                 plant != null && Math.abs(v - plant) < 1 ? 'near' : '',
-                shown && shown.dept === d.code && shown.shift === sh.key ? 'shown' : '',
+                selected && selected.dept === d.code && selected.shift === sh.key ? 'shown' : '',
               ].filter(Boolean).join(' ')
               return (
                 <span key={sh.key} role="cell" className="board-slot">
-                <a
-                  className={cls}
-                  href={href('attendance', { dept: d.code, shift: sh.key })}
-                  style={{ ['--t' as string]: t.toFixed(3), ['--c' as string]: ci }}
-                  aria-label={`${d.name}, ${sh.label.toLowerCase()} shift: ${fmt(v)}% unplanned absence, ${c.employees} people. Open attendance.`}
-                  onMouseEnter={() => setHover({ dept: d.code, shift: sh.key })}
-                  onFocus={() => setHover({ dept: d.code, shift: sh.key })}
-                  onClick={e => {
-                    // Touch: the first tap shows the details, the link in the strip opens the page.
-                    if (!hoverCapable() && !(picked?.dept === d.code && picked?.shift === sh.key)) {
-                      e.preventDefault()
-                      setPicked({ dept: d.code, shift: sh.key })
-                      return
-                    }
-                    ;(e.currentTarget as HTMLElement).style.viewTransitionName = 'focus-cell'
-                  }}
-                >
-                  <span className="board-bar" aria-hidden="true" />
-                  <span className="board-val">{fmt(v)}</span>
-                </a>
+                  <button
+                    className={cls}
+                    style={{ ['--t' as string]: t.toFixed(3), ['--c' as string]: ci }}
+                    aria-label={`${d.name}, ${sh.label.toLowerCase()} shift: ${fmt(v)}% unplanned absence, ${c.employees} people. Show this team.`}
+                    aria-pressed={Boolean(selected && selected.dept === d.code && selected.shift === sh.key)}
+                    onClick={() => onSelect({ dept: d.code, shift: sh.key })}
+                  >
+                    <span className="board-bar" aria-hidden="true" />
+                    <span className="board-val">{fmt(v)}</span>
+                  </button>
                 </span>
               )
             })}
           </div>
         ))}
       </div>
-
-      <div className={`board-detail${isFlag ? ' flag' : ''}`} aria-live="polite">
-        {shown && shownCell?.unplanned_absence_rate != null ? (
-          <>
-            <div className="bd-head">
-              <strong>{deptName(shown.dept)}, {shown.shift.toLowerCase()} shift</strong>
-              <span>{shownCell.employees} people</span>
-            </div>
-            <div className="bd-body">
-              <div className="bd-num">
-                <b>{fmt(shownCell.unplanned_absence_rate)}%</b>
-                {gap != null && <span className={gap > 1 ? 'up' : gap < -1 ? 'down' : ''}>{gap >= 0 ? '+' : '−'}{fmt(Math.abs(gap))} pts vs plant</span>}
-              </div>
-              <Trend key={`${shown.dept}|${shown.shift}`} values={aligned} plant={plantSeries.map(r => r.unplanned_absence_rate)} flag={isFlag} />
-            </div>
-            <div className="bd-links">
-              <a href={href('attendance', { dept: shown.dept, shift: shown.shift })}>Open attendance</a>
-              <a href={href('ask', { q: `How has absence on ${deptName(shown.dept)} ${shown.shift.toLowerCase()} shift changed?` })}>Ask about it</a>
-              <span className="bd-legend"><i /> plant</span>
-            </div>
-          </>
-        ) : (
-          <p className="bd-empty">Point at a cell to see that team’s last 26 weeks.</p>
-        )}
-      </div>
-
       <div className="board-foot">
-        <span>Plant average {plant != null ? `${fmt(plant)}%` : '–'}</span>
-        <span><i className="key-flag" /> Flagged this week</span>
-        <span><i className="key-hidden" /> Hidden, under 10 people</span>
+        <span>Plant {plant != null ? `${fmt(plant)}%` : '–'}</span>
+        <span><i className="key-flag" /> Flagged</span>
+        <span><i className="key-hidden" /> Under 10 people</span>
       </div>
     </figure>
   )
@@ -269,24 +226,48 @@ function storySteps(signals: Signal[], plant: number | null, teams: number, focu
   return steps
 }
 
-/** Sets the index of the step nearest the middle of the viewport (or -1 above the story). */
-function useActiveStep(list: React.RefObject<HTMLElement | null>, count: number) {
-  const [active, setActive] = useState(-1)
-  useEffect(() => {
-    const el = list.current
-    if (!el || !('IntersectionObserver' in window)) return
-    const io = new IntersectionObserver(entries => {
-      for (const e of entries) {
-        const i = Number((e.target as HTMLElement).dataset.step)
-        if (e.isIntersecting) setActive(i)
-        else if (i === 0 && e.boundingClientRect.top > 0) setActive(-1)
-      }
-    // On narrow screens the pinned board covers the top of the viewport, so a step counts once its card is below it.
-    }, { rootMargin: window.innerWidth < 1080 ? '-62% 0px -22% 0px' : '-45% 0px -45% 0px' })
-    el.querySelectorAll('[data-step]').forEach(n => io.observe(n))
-    return () => io.disconnect()
-  }, [list, count])
-  return active
+const STEP_MS = 5200
+
+/** The walkthrough plays in place: one card, Back / Next, and an autoplay bar. No scrolling. */
+function Walkthrough({ steps, idx, setIdx, playing, setPlaying }: {
+  steps: Step[]
+  idx: number
+  setIdx: (i: number) => void
+  playing: boolean
+  setPlaying: (p: boolean) => void
+}) {
+  const cur = idx >= 0 ? steps[idx] : null
+  const next = () => (idx < steps.length - 1 ? setIdx(idx + 1) : (setPlaying(false), setIdx(-1)))
+  return (
+    <div className={`walk${cur ? ' on' : ''}`}>
+      <div className="walk-dots" aria-label="Walkthrough steps">
+        {steps.map((st, i) => (
+          <button key={i} className={i === idx ? 'cur' : i < idx ? 'past' : ''} aria-label={`Step ${i + 1}: ${st.title}`} aria-current={i === idx ? 'step' : undefined} onClick={() => { setIdx(i); setPlaying(false) }}>
+            {i === idx && playing && <i key={idx} style={{ animationDuration: `${STEP_MS}ms` }} onAnimationEnd={next} />}
+          </button>
+        ))}
+      </div>
+      {cur ? (
+        <div className="walk-card" key={idx}>
+          <span className="walk-n">Step {idx + 1} of {steps.length}</span>
+          <h3>{cur.title}</h3>
+          <p>{cur.body}</p>
+        </div>
+      ) : (
+        <div className="walk-card idle">
+          <h3>How the brief found this team</h3>
+          <p>Five steps, about 25 seconds: from all 21 teams to the one that needs a conversation.</p>
+        </div>
+      )}
+      <div className="walk-ctrl">
+        {cur && <button className="btn-line small" onClick={() => { setPlaying(false); setIdx(Math.max(-1, idx - 1)) }}>Back</button>}
+        <button className="btn-solid small" onClick={() => { if (!cur) { setIdx(0); setPlaying(true) } else setPlaying(!playing) }}>
+          {!cur ? 'Play the walkthrough' : playing ? 'Pause' : 'Play'}
+        </button>
+        {cur && <button className="btn-line small" onClick={() => { setPlaying(false); next() }}>{idx === steps.length - 1 ? 'Done' : 'Next'}</button>}
+      </div>
+    </div>
+  )
 }
 
 /* ------------------------------------------------------------------ sections */
@@ -302,7 +283,7 @@ function signalTrend(s: Signal) {
   return values.length > 3 && plant.length === values.length ? { values, plant } : null
 }
 
-function Change({ signal }: { signal: Signal }) {
+function Change({ signal, onTeam, onAsk }: { signal: Signal; onTeam: (f: Focus) => void; onAsk: (q: string) => void }) {
   const { now, ref } = comparison(signal)
   const a = num(now?.value)
   const b = num(ref?.value)
@@ -316,8 +297,10 @@ function Change({ signal }: { signal: Signal }) {
         <h3>{signal.title.replace(' · ', ' ')}</h3>
         <p>{signal.detail}</p>
         <div className="change-links">
-          <a href={signalLink(signal)}>{AREA_LABEL[signal.area]}</a>
-          <a href={href('ask', { q: signal.question })}>Ask about it</a>
+          {signal.department && signal.shift && signal.shift !== 'ALL'
+            ? <button className="link-like" onClick={() => onTeam({ dept: signal.department!, shift: signal.shift! })}>See the team</button>
+            : <a href={signalLink(signal)}>{AREA_LABEL[signal.area]}</a>}
+          <button className="link-like" onClick={() => onAsk(signal.question)}>Ask about it</button>
           <EvidenceButton title={signal.title} description={signal.method} evidence={signal.evidence} label="Query" />
         </div>
       </div>
@@ -476,21 +459,85 @@ function WhatIf() {
 const STARTERS = [
   'What should I look at this week?',
   'Where are new hires leaving within 90 days?',
+  'Which training programs are effective?',
   'Can I trust the data?',
 ]
 
-function AskBox() {
+interface AskTurn { q: string; pending: boolean; text?: string; kind?: string; evidence?: Evidence[]; error?: string; model?: string }
+
+/** Ask right here: the answer appears under the box, with its evidence. Optional Claude mode with your own key. */
+function AskInline({ question, onAsked }: { question: { q: string; n: number } | null; onAsked: () => void }) {
+  const client = useTRPCClient()
+  const { backend } = useRuntime()
+  const status = useQuery(useTRPC().meta.status.queryOptions())
   const [draft, setDraft] = useState('')
-  const go = (q: string) => { if (q.trim()) window.location.hash = href('ask', { q: q.trim() }) }
+  const [turn, setTurn] = useState<AskTurn | null>(null)
+  const [claude, setClaude] = useState(false)
+  const [key, setKey] = useState('')
+  const [model, setModel] = useState<string>(MODELS[0].id)
+  const lastN = useRef(-1)
+
+  const ask = async (q: string) => {
+    const text = q.trim()
+    if (!text) return
+    setDraft(text)
+    setTurn({ q: text, pending: true })
+    try {
+      if (claude && key) {
+        const a = await askClaude({ client, apiKey: key, model, question: text, asOf: status.data?.asOf ?? '' })
+        setTurn({ q: text, pending: false, text: a.text, kind: 'answer', evidence: a.evidence, model })
+      } else {
+        const a = await client.insights.ask.mutate({ question: text })
+        setTurn({ q: text, pending: false, text: a.text, kind: a.kind, evidence: a.evidence })
+      }
+    } catch (e) {
+      setTurn({ q: text, pending: false, error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+  useEffect(() => {
+    if (question && question.n !== lastN.current) { lastN.current = question.n; void ask(question.q); onAsked() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [question])
+
   return (
     <div className="askbox">
-      <form onSubmit={e => { e.preventDefault(); go(draft) }}>
+      <form onSubmit={e => { e.preventDefault(); void ask(draft) }}>
         <input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Which shift has the most overtime?" aria-label="Ask a question about the workforce" />
-        <button type="submit" disabled={!draft.trim()}>Ask</button>
+        <button type="submit" disabled={!draft.trim() || turn?.pending}>{turn?.pending ? 'Asking…' : 'Ask'}</button>
       </form>
       <div className="askbox-starters">
-        {STARTERS.map(s => <button key={s} type="button" onClick={() => go(s)}>{s}</button>)}
+        {STARTERS.map(s => <button key={s} type="button" onClick={() => void ask(s)}>{s}</button>)}
       </div>
+      <div className="ask-mode">
+        <label className="switch">
+          <input type="checkbox" checked={claude} onChange={e => setClaude(e.target.checked)} />
+          <span className="switch-track"><span className="switch-thumb" /></span>
+          <span>Answer with Claude, using your own API key</span>
+        </label>
+        {claude && (
+          <div className="ask-key">
+            <input type="password" value={key} onChange={e => setKey(e.target.value)} placeholder="sk-ant-…" aria-label="Anthropic API key" autoComplete="off" />
+            <select className="select" value={model} onChange={e => setModel(e.target.value)} aria-label="Model">
+              {MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
+            <small>The key stays in this tab and goes only to api.anthropic.com. Claude sees tool results (aggregates), never tables.</small>
+          </div>
+        )}
+      </div>
+      {turn && (
+        <div className="ask-answer" aria-live="polite">
+          <p className="ask-q">{turn.q}</p>
+          {turn.pending && <p className="muted"><span className="spinner" /> {backend ? 'Checking approved metrics…' : 'Waiting for the live database to finish starting…'}</p>}
+          {turn.error && <p className="error">{turn.error}</p>}
+          {turn.text && <AnswerBody text={turn.text} evidence={turn.evidence} refusal={turn.kind === 'refusal'} />}
+          {!turn.pending && !turn.error && (
+            <div className="insight-meta">
+              <span className={`badge ${turn.kind === 'refusal' ? 'warn' : 'good'}`}>{turn.kind === 'refusal' ? 'Privacy guardrail' : turn.model ? 'Claude, tools only' : 'Metric-grounded'}</span>
+              {turn.evidence && turn.evidence.length > 0 && <EvidenceButton title={turn.q} evidence={turn.evidence} label="View evidence" />}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -535,7 +582,9 @@ function useReveal(root: React.RefObject<HTMLElement | null>) {
 
 /* ------------------------------------------------------------------ page */
 
-export function Brief() {
+const SECTIONS = ['floor', 'changes', 'teams', 'trust', 'ask'] as const
+
+export function Brief({ params }: { params: URLSearchParams }) {
   const trpc = useTRPC()
   const { replayIntro } = useRuntime()
   const root = useRef<HTMLDivElement>(null)
@@ -543,119 +592,179 @@ export function Brief() {
   const status = useQuery(trpc.meta.status.queryOptions())
   const kpis = useQuery(trpc.kpi.summary.queryOptions())
   const signals = useQuery(trpc.insights.signals.queryOptions())
+  const grid = useQuery(trpc.attendance.byGroup.queryOptions({ by: 'department_shift', weeks: 4 }))
+  const ref = useQuery(trpc.meta.reference.queryOptions())
+  const trends = useQuery(trpc.attendance.boardTrends.queryOptions())
+  const early = useQuery(trpc.workforce.earlyAttrition.queryOptions({ by: 'department_shift' }))
 
   const primaryIds = ['headcount', 'unplanned_absence', 'attrition', 'training_on_time']
   const primary = primaryIds.map(id => kpis.data?.find(x => x.id === id)).filter(Boolean) as KpiTile[]
   const changes = signals.data?.filter(s => s.severity !== 'info').slice(0, 3) ?? []
   const head = signals.data ? headlineFrom(signals.data) : null
   const flagged = new Set(changes.filter(s => s.department && s.shift && s.shift !== 'ALL').map(s => `${s.department}|${s.shift}`))
-  const grid = useQuery(trpc.attendance.byGroup.queryOptions({ by: 'department_shift', weeks: 4 }))
   const plant = grid.data?.rows.find(r => r.department_code === 'ALL' && r.shift === 'ALL')?.unplanned_absence_rate ?? null
-  const teams = grid.data?.rows.filter(r => r.department_code !== 'ALL' && r.shift !== 'ALL' && r.shift !== 'UNASSIGNED').length ?? 21
+  const teamsCount = grid.data?.rows.filter(r => r.department_code !== 'ALL' && r.shift !== 'ALL' && r.shift !== 'UNASSIGNED').length ?? 21
   const focus: Focus | null = head?.group?.shift && head.group.shift !== 'ALL' ? { dept: head.group.dept, shift: head.group.shift } : null
   const row: RowVals = focus ? ['EARLY', 'LATE', 'NIGHT'].map(sh => ({ shift: sh, value: grid.data?.rows.find(r => r.department_code === focus.dept && r.shift === sh && !r.suppressed)?.unplanned_absence_rate ?? null })) : []
-  const steps = signals.data ? storySteps(signals.data, plant, teams, focus, row) : []
-  const stepList = useRef<HTMLOListElement>(null)
-  const active = useActiveStep(stepList, steps.length)
+  const steps = signals.data ? storySteps(signals.data, plant, teamsCount, focus, row) : []
+
+  // Selected team: from a shared link (?team=LOG-NIGHT), else the flagged team.
+  const fromLink = (() => { const t = params.get('team'); if (!t) return null; const [dept, shift] = t.split('-'); return dept && shift ? { dept, shift } : null })()
+  const [picked, setPicked] = useState<Focus | null>(null)
+  const selected = picked ?? fromLink ?? focus
+  // A shared link opened while the page is up replaces whatever was picked before.
+  const linkKey = params.get('team')
+  useEffect(() => { if (linkKey) setPicked(null) }, [linkKey])
+  const [floorShift, setFloorShift] = useState<ShiftKey>('NIGHT')
+  useEffect(() => { if (focus?.shift && ['EARLY', 'LATE', 'NIGHT'].includes(focus.shift)) setFloorShift(focus.shift as ShiftKey) }, [focus?.shift])
+
+  const [walkIdx, setWalkIdx] = useState(-1)
+  const [playing, setPlaying] = useState(false)
+  const walkMode: BoardMode = walkIdx >= 0 ? steps[walkIdx]?.mode ?? 'brief' : 'brief'
+  const [askQ, setAskQ] = useState<{ q: string; n: number } | null>(null)
+
+  const goTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  // On one-column layouts the team view sits under the board, so go straight to it.
+  const showTeam = (f: Focus) => { setPicked(f); setTimeout(() => goTo(window.innerWidth < 1080 ? 'team-panel' : 'teams'), 30) }
+  const askAbout = (q: string) => { setAskQ(a => ({ q, n: (a?.n ?? 0) + 1 })); goTo('ask') }
+
+  // Scroll to a section asked for in the URL (?s=trust) or to a shared team.
+  useEffect(() => {
+    const target = params.get('s') ?? (params.get('team') ? 'teams' : null)
+    if (target && (SECTIONS as readonly string[]).includes(target)) setTimeout(() => goTo(target), 80)
+  }, [params])
+
+  const team = (() => {
+    if (!selected || !grid.data) return null
+    const cell = grid.data.rows.find(r => r.department_code === selected.dept && r.shift === selected.shift)
+    if (!cell) return null
+    const series = (d: string, sh: string) => (trends.data?.rows ?? []).filter(r => r.department_code === d && r.shift === sh)
+    const plantSeries = series('ALL', 'ALL')
+    const mine = new Map(series(selected.dept, selected.shift).map(r => [r.week_start, r.unplanned_absence_rate]))
+    const ev = signals.data?.find(s => s.area === 'attendance')?.evidence[0]?.rows as Record<string, unknown>[] | undefined
+    const ot = (d: string, sh: string) => {
+      const v = (ev ?? []).filter(r => r.department_code === d && r.shift === sh).slice(-4).map(r => r.overtime_hours_per_head as number | null).filter((x): x is number => x != null)
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null
+    }
+    const e = early.data?.rows.find(r => r.department_code === selected.dept && r.shift === selected.shift)
+    const ep = early.data?.rows.find(r => r.department_code === 'ALL' && r.shift === 'ALL')
+    const data: TeamData = {
+      dept: selected.dept, shift: selected.shift, employees: cell.employees,
+      rate: cell.suppressed ? null : cell.unplanned_absence_rate, plantRate: plant,
+      weeks: plantSeries.map(p => ({ week: p.week_start, team: mine.get(p.week_start) ?? null, plant: p.unplanned_absence_rate })),
+      overtime: ev ? { team: ot(selected.dept, selected.shift), plant: ot('ALL', 'ALL') } : null,
+      early: e ? { exits: e.early_exits, hires: e.hires, rate: e.early_exits != null && e.hires ? (100 * e.early_exits) / e.hires : null, plantRate: ep?.early_exits != null && ep.hires ? (100 * ep.early_exits) / ep.hires : null, suppressed: Boolean(e.suppressed) } : null,
+      signals: (signals.data ?? []).filter(s => s.department === selected.dept && s.shift === selected.shift),
+    }
+    return data
+  })()
+  // During the walkthrough's last steps, show the team it is talking about.
+  useEffect(() => { if (walkMode === 'cell' && focus) setPicked(focus) }, [walkMode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Memoised: a new array on every render would rebuild the 2,600-person floor each time.
+  const floorTeams: FloorTeam[] = useMemo(() => (grid.data?.rows ?? []).map(r => ({ dept: r.department_code, shift: r.shift, employees: r.employees, rate: r.unplanned_absence_rate, suppressed: r.suppressed })), [grid.data])
+  const flaggedKey = [...flagged].join(',')
+  const flaggedSet = useMemo(() => new Set(flaggedKey ? flaggedKey.split(',') : []), [flaggedKey])
 
   return (
     <div className="brief" ref={root}>
       <div className="reading-progress" aria-hidden="true" />
-      <section className="story">
-        <div className="hero-copy">
-          <p className="hero-date">Weekly people brief for a synthetic plant of about 2,600 people{status.data ? `, week ending ${fmtDate(status.data.asOf, { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}</p>
-          <h1>{head ? head.title : <span className="ghost-line" />}</h1>
-          <p className="hero-lead">{head?.lead ?? ''}</p>
-          <div className="hero-actions">
-            <button className="btn-solid" onClick={() => document.querySelector('[data-step="0"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>Show me how it found this</button>
-            {kpis.data && signals.data && status.data && (
-              <button className="btn-line" onClick={() => downloadText(`people-brief-${status.data.asOf}.md`, briefMarkdown(status.data.asOf, kpis.data, signals.data), 'text/markdown')}>
-                <Icon name="download" /> Download the brief
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="story-visual">
-          <div className="story-sticky">
-            {steps.length > 0 && (
-              <nav className={`step-rail${active >= 0 ? ' on' : ''}`} aria-label="Story steps">
-                {steps.map((st, i) => (
-                  <button key={i} className={i === active ? 'cur' : i < active ? 'past' : ''} aria-label={`Step ${i + 1}: ${st.title}`} aria-current={i === active ? 'step' : undefined}
-                    onClick={() => document.querySelector(`[data-step="${i}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })} />
-                ))}
-                <span>{active >= 0 ? `Step ${active + 1} of ${steps.length}: ${steps[active].title}` : `${steps.length} steps: how the brief found this`}</span>
-              </nav>
-            )}
-            <ShiftBoard flagged={flagged} focus={focus} mode={active >= 0 ? steps[active]?.mode ?? 'brief' : 'brief'} />
-          </div>
-        </div>
-        <ol className="story-steps" ref={stepList}>
-          {steps.map((st, i) => (
-            <li key={i} data-step={i} className={active === i ? 'on' : ''}>
-              <div className="step-card">
-                <span className="step-n">Step {i + 1} of {steps.length}</span>
-                <h2>{st.title}</h2>
-                <p>{st.body}</p>
-                {i === steps.length - 1 && <button className="step-next" onClick={() => document.getElementById('changes')?.scrollIntoView({ behavior: 'smooth' })}>See the changes in detail</button>}
-              </div>
-            </li>
-          ))}
-        </ol>
-      </section>
 
-      <section className="vitals" aria-label="Headline numbers">
-        {primary.length === 4
-          ? primary.map((t, i) => {
-              const delta = t.value != null && t.previous != null ? t.value - t.previous : null
-              const good = delta == null || t.goodDirection === 'none' ? null : (delta > 0) === (t.goodDirection === 'up')
-              return (
-                <div className="vital" key={t.id} style={{ ['--i' as string]: i }}>
-                  <span className="vital-label">{t.label}</span>
-                  <strong><CountUp text={formatTile(t)} /></strong>
-                  <span className={`vital-delta ${good == null ? '' : good ? 'good' : 'bad'}`}>
-                    {delta != null && delta !== 0 && <>{delta > 0 ? '+' : '−'}{t.unit === 'people' ? fmtInt(Math.abs(delta)) : fmt(Math.abs(delta), 1)}{t.unit === '%' ? ' pts' : ''} </>}
-                    {t.comparison}
-                  </span>
-                </div>
-              )
-            })
-          : Array.from({ length: 4 }, (_, i) => <Skeleton key={i} height={92} />)}
+      <section className="hero-dark" id="floor">
+        <div className="hero-inner">
+          <div className="hero-copy">
+            <p className="hero-date">Weekly people brief · synthetic vehicle plant{status.data ? ` · week ending ${fmtDate(status.data.asOf, { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}</p>
+            <h1>{head ? head.title : <span className="ghost-line" />}</h1>
+            <p className="hero-lead">{head?.lead ?? ''}</p>
+            <div className="hero-actions">
+              <button className="btn-solid on-dark" onClick={() => { goTo('teams'); setWalkIdx(0); setPlaying(true) }}>Play the walkthrough</button>
+              {kpis.data && signals.data && status.data && (
+                <button className="btn-line on-dark" onClick={() => downloadText(`people-brief-${status.data.asOf}.md`, briefMarkdown(status.data.asOf, kpis.data, signals.data), 'text/markdown')}>
+                  <Icon name="download" /> Download the brief
+                </button>
+              )}
+            </div>
+          </div>
+          {grid.data && ref.data ? (
+            <Floor
+              teams={floorTeams}
+              depts={ref.data.departments}
+              shift={floorShift}
+              onShift={setFloorShift}
+              flagged={flaggedSet}
+              selectedDept={selected?.dept ?? null}
+              onSelect={(dept, sh) => {
+                const shiftPick = sh !== 'ALL' ? sh : (['EARLY', 'LATE', 'NIGHT'].map(k => grid.data!.rows.find(r => r.department_code === dept && r.shift === k)).filter(r => r && !r.suppressed).sort((a, b) => (b!.unplanned_absence_rate ?? 0) - (a!.unplanned_absence_rate ?? 0))[0]?.shift ?? 'EARLY')
+                showTeam({ dept, shift: shiftPick })
+              }}
+            />
+          ) : <Skeleton height={520} />}
+          <div className="hud" aria-label="Headline numbers">
+            {primary.length === 4
+              ? primary.map((t, i) => {
+                  const delta = t.value != null && t.previous != null ? t.value - t.previous : null
+                  const good = delta == null || t.goodDirection === 'none' ? null : (delta > 0) === (t.goodDirection === 'up')
+                  return (
+                    <div className="vital" key={t.id} style={{ ['--i' as string]: i }}>
+                      <span className="vital-label">{t.label}</span>
+                      <strong><CountUp text={formatTile(t)} /></strong>
+                      <span className={`vital-delta ${good == null ? '' : good ? 'good' : 'bad'}`}>
+                        {delta != null && delta !== 0 && <>{delta > 0 ? '+' : '−'}{t.unit === 'people' ? fmtInt(Math.abs(delta)) : fmt(Math.abs(delta), 1)}{t.unit === '%' ? ' pts' : ''} </>}
+                        {t.comparison}
+                      </span>
+                    </div>
+                  )
+                })
+              : null}
+          </div>
+          {kpis.error && <ErrorNote error={kpis.error} />}
+        </div>
       </section>
-      {kpis.error && <ErrorNote error={kpis.error} />}
 
       <section className="block" id="changes">
         <header className="block-head">
           <h2>{changes.length === 1 ? 'One change is worth a conversation' : `${['Two', 'Three'][changes.length - 2] ?? 'Three'} changes are worth a conversation`}</h2>
-          <p>Each one is a team compared with the rest of the plant over the last six weeks, flagged only when the gap is statistically clear. They point to where a manager should look, never to individuals.</p>
+          <p>Each is a team compared with the rest of the plant over six weeks, flagged only when the gap is statistically clear. They point to where to look, never to individuals.</p>
         </header>
         {signals.isLoading && <Skeleton height={320} />}
         {signals.error && <ErrorNote error={signals.error} />}
-        <ol className="changes">{changes.map(s => <Change key={s.id} signal={s} />)}</ol>
+        <ol className="changes">{changes.map(s => <Change key={s.id} signal={s} onTeam={showTeam} onAsk={askAbout} />)}</ol>
         {signals.data && changes.length === 0 && <p className="empty">Nothing stands out in this snapshot.</p>}
       </section>
 
-      <section className="block">
+      <section className="block" id="teams">
+        <header className="block-head">
+          <h2>Every team, one board</h2>
+          <p>Twenty-one teams, seven departments by three shifts. Pick a cell to see that team, or play the walkthrough to see how the brief got to its headline.</p>
+        </header>
+        <Walkthrough steps={steps} idx={walkIdx} setIdx={setWalkIdx} playing={playing} setPlaying={setPlaying} />
+        <div className="teams-grid">
+          <ShiftBoard flagged={flagged} focus={focus} mode={walkMode} selected={selected} onSelect={f => { setPicked(f); setPlaying(false) }} />
+          {team ? <Team t={team} onAsk={askAbout} /> : <Skeleton height={420} />}
+        </div>
+      </section>
+
+      <section className="block" id="trust">
         <header className="block-head">
           <h2>Bad data is stopped before it reaches a chart</h2>
-          <p>A missing punch can look like an absence. Every source row is checked first, and anything that fails is held back where a reviewer can see it.</p>
+          <p>A missing punch can look like an absence. Every source row is checked first; anything that fails is held back where a reviewer can see it. Try both switches below.</p>
         </header>
         <Trust />
         <WhatIf />
-        <a className="more" href={href('quality')}>Review the checks that found something</a>
       </section>
 
-      <section className="block block-split">
+      <section className="block block-split" id="ask">
         <header className="block-head">
           <h2>Ask in plain words</h2>
-          <p>Answers come only from approved aggregate queries, and each one shows the SQL behind it. Questions about individual employees are declined.</p>
+          <p>Answers come from approved aggregate queries and show the SQL behind them. Questions about individual employees are declined.</p>
         </header>
-        <AskBox />
+        <AskInline question={askQ} onAsked={() => {}} />
       </section>
 
       <section className="block block-build">
         <header className="block-head">
           <h2>How it’s built</h2>
-          <p>The whole stack runs in this browser tab: PostgreSQL compiled to WebAssembly, Prisma, a tRPC router and React. The same code runs on a Node server against real PostgreSQL, and GitHub Actions tests both.</p>
+          <p>The whole stack runs in this tab: PostgreSQL in WebAssembly inside a Web Worker, Prisma, a typed tRPC API and React. The same code runs on Node against real PostgreSQL, and GitHub Actions tests both.</p>
         </header>
         <Conveyor className="track flow-track" />
         <ol className="flow">

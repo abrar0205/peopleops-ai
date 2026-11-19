@@ -1,4 +1,4 @@
-import { createContext, startTransition, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, memo, startTransition, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { BootStep } from '../browser/boot'
 import { startWorker, type WorkerBackend } from '../browser/workerClient'
@@ -6,7 +6,7 @@ import type { Snapshot } from '../api/snapshot'
 import { Intro, PHASES, phaseOf } from './Intro'
 import { markIntroDone } from './motion'
 import { makeClient, TRPCProvider, useTRPC } from '../browser/trpc'
-import { EvidenceProvider, Icon, Toast, fmtDate, href, useRoute } from './common'
+import { EvidenceProvider, Icon, Toast, fmtDate, href, useRoute, withTransition } from './common'
 import { EvidenceDrawer } from './Evidence'
 import { Brief } from './pages/Brief'
 import { Attendance } from './pages/Attendance'
@@ -30,10 +30,13 @@ interface Runtime {
 }
 const RuntimeCtx = createContext<Runtime>({ backend: null, steps: [], rerun: async () => {}, rerunning: false, notify: () => {}, replayIntro: () => {} })
 export const useRuntime = () => useContext(RuntimeCtx)
+// Boot steps change about a dozen times while the worker starts; only the nav badge needs them.
+const StepsCtx = createContext<BootStep[]>([])
 
 /** Nav badge: the real database boot, step by step, then "Live". */
 function EngineBadge() {
-  const { steps, backend } = useRuntime()
+  const { backend } = useRuntime()
+  const steps = useContext(StepsCtx)
   if (import.meta.env.VITE_API_URL) return null
   const { idx, ready, ms } = phaseOf(steps)
   const label = ready || backend ? 'Live database' : idx >= 0 ? `${PHASES[idx].label}…` : 'Starting the database…'
@@ -47,11 +50,26 @@ function EngineBadge() {
   )
 }
 
+// One page: the nav jumps to its sections. Detail pages live in the footer.
 const NAV = [
-  { page: 'overview', label: 'Brief', short: 'Brief' },
-  { page: 'attendance', label: 'Explore', short: 'Explore' },
-  { page: 'ask', label: 'Ask', short: 'Ask' },
+  { id: 'floor', label: 'Floor' },
+  { id: 'changes', label: 'Changes' },
+  { id: 'teams', label: 'Teams' },
+  { id: 'trust', label: 'Trust' },
+  { id: 'ask', label: 'Ask' },
 ]
+
+/** Highlights the section in view on the brief. */
+function useSectionInView(active: boolean) {
+  const [id, setId] = useState('floor')
+  useEffect(() => {
+    if (!active) return
+    const io = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) setId(e.target.id) }, { rootMargin: '-40% 0px -55% 0px' })
+    const t = setTimeout(() => NAV.forEach(n => { const el = document.getElementById(n.id); if (el) io.observe(el) }), 200)
+    return () => { clearTimeout(t); io.disconnect() }
+  }, [active])
+  return id
+}
 const EXPLORE = [
   { page: 'attendance', label: 'Attendance' },
   { page: 'attrition', label: 'Attrition' },
@@ -61,7 +79,6 @@ const EXPLORE = [
 // How it works and the SQL console live in the brief's last section and the footer, not the nav.
 const SECTION_OF: Record<string, string> = { attendance: 'attendance', attrition: 'attendance', training: 'attendance', quality: 'attendance', sql: 'method' }
 
-type ViewTransitionDoc = Document & { startViewTransition?: (cb: () => void) => unknown }
 const THEME_KEY = 'peopleops-theme'
 
 /** Light/dark switch. Starts from the device setting; a choice is remembered. */
@@ -72,9 +89,7 @@ function ThemeToggle() {
     const next = theme === 'dark' ? 'light' : 'dark'
     const apply = () => { document.documentElement.dataset.theme = next; setTheme(next) }
     try { localStorage.setItem(THEME_KEY, next) } catch { /* storage unavailable */ }
-    const doc = document as ViewTransitionDoc
-    if (doc.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) doc.startViewTransition(apply)
-    else apply()
+    withTransition(apply)
   }
   return (
     <button className="theme-toggle" onClick={flip} aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} title={theme === 'dark' ? 'Light theme' : 'Dark theme'}>
@@ -100,7 +115,7 @@ function Shell() {
       case 'ask': return <Ask params={route.params} />
       case 'sql': return <SqlLab />
       case 'method': return <Method />
-      default: return <Brief />
+      default: return <Brief params={route.params} />
     }
   })()
 
@@ -108,19 +123,41 @@ function Shell() {
   const current = known.includes(route.page) ? route.page : 'overview'
   const section = SECTION_OF[current] ?? current
   const exploring = section === 'attendance'
+  const onBrief = current === 'overview'
+  const inView = useSectionInView(onBrief)
+  // Over the dark hero the nav goes dark too.
+  const [overDark, setOverDark] = useState(false)
+  useEffect(() => {
+    if (!onBrief) { setOverDark(false); return }
+    // Observe instead of reading layout on every scroll event.
+    let io: IntersectionObserver | null = null
+    const t = setTimeout(() => {
+      const h = document.getElementById('floor')
+      if (!h) return
+      io = new IntersectionObserver(([e]) => setOverDark(e.isIntersecting), { rootMargin: '-70px 0px -100% 0px' })
+      io.observe(h)
+    }, 100)
+    return () => { clearTimeout(t); io?.disconnect() }
+  }, [onBrief])
 
   return (
     <div className="app">
       <a className="skip" href="#content">Skip to content</a>
-      <header className="nav">
+      <header className={`nav${overDark ? ' dark' : ''}`}>
         <div className="nav-inner">
           <a className="logo" href={href('overview')} aria-label="PeopleOps home">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="6" height="6" /><rect x="9" y="2" width="6" height="6" /><rect x="16" y="2" width="6" height="6" /><rect x="2" y="9" width="6" height="6" /><rect x="9" y="9" width="6" height="6" className="hot" /><rect x="16" y="9" width="6" height="6" /><rect x="2" y="16" width="6" height="6" /><rect x="9" y="16" width="6" height="6" /><rect x="16" y="16" width="6" height="6" /></svg>
             <span>PeopleOps</span>
           </a>
-          <nav aria-label="Primary">
+          <nav aria-label="Sections">
             {NAV.map(i => (
-              <a key={i.page} href={href(i.page)} className={section === i.page ? 'on' : ''} aria-current={section === i.page ? 'page' : undefined}><span className="l-full">{i.label}</span><span className="l-short">{i.short}</span></a>
+              <a
+                key={i.id}
+                href={href('overview', { s: i.id })}
+                className={onBrief && inView === i.id ? 'on' : ''}
+                aria-current={onBrief && inView === i.id ? 'location' : undefined}
+                onClick={e => { if (onBrief) { e.preventDefault(); document.getElementById(i.id)?.scrollIntoView({ behavior: 'smooth' }) } }}
+              >{i.label}</a>
             ))}
           </nav>
           <EngineBadge />
@@ -148,6 +185,11 @@ function Shell() {
             Figures are aggregates only, groups under 10 people are hidden, and nothing scores individual employees.
           </p>
           <div className="foot-links">
+            <span>Detail pages:</span>
+            <a href={href('attendance')}>Attendance</a>
+            <a href={href('attrition')}>Attrition</a>
+            <a href={href('training')}>Training</a>
+            <a href={href('quality')}>Data quality</a>
             <a href={href('method')}>How it works</a>
             <a href={href('sql')}>SQL console</a>
             <a href={REPO_URL} target="_blank" rel="noreferrer">Source code</a>
@@ -157,6 +199,9 @@ function Shell() {
     </div>
   )
 }
+
+// The shell has no props; memo keeps boot-step updates in App from re-rendering the whole page.
+const MemoShell = memo(function MemoShell() { return <Shell /> })
 
 function Providers({ worker, children }: { worker: WorkerBackend | null; children: ReactNode }) {
   const queryClient = useMemo(() => new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false, refetchOnWindowFocus: false } } }), [])
@@ -200,10 +245,13 @@ function RuntimeProvider({ backend, steps, replayIntro, children }: { backend: W
       setRerunning(false)
     }
   }, [backend, queryClient])
+  const value = useMemo(() => ({ backend, steps: [] as BootStep[], rerun, rerunning, notify, replayIntro }), [backend, rerun, rerunning, notify, replayIntro])
   return (
-    <RuntimeCtx.Provider value={{ backend, steps, rerun, rerunning, notify, replayIntro }}>
-      {children}
-      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+    <RuntimeCtx.Provider value={value}>
+      <StepsCtx.Provider value={steps}>
+        {children}
+        {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+      </StepsCtx.Provider>
     </RuntimeCtx.Provider>
   )
 }
@@ -225,6 +273,7 @@ export default function App() {
   const [snapshotDone, setSnapshotDone] = useState(remote)
   const [intro, setIntro] = useState<'show' | 'leaving' | 'gone'>(remote ? 'gone' : 'show')
   const [replay, setReplay] = useState(0)
+  const replayIntro = useCallback(() => { setReplay(r => r + 1); setIntro('show') }, [])
   const worker = useMemo(() => (remote ? null : startWorker(setSteps)), [remote])
 
   useEffect(() => { if (intro === 'gone') markIntroDone() }, [intro])
@@ -256,11 +305,11 @@ export default function App() {
 
   return (
     <Providers worker={worker}>
-      <RuntimeProvider backend={backend} steps={steps} replayIntro={() => { setReplay(r => r + 1); setIntro('show') }}>
+      <RuntimeProvider backend={backend} steps={steps} replayIntro={replayIntro}>
         {canOpen && (
           <SnapshotSeed snapshot={snapshot}>
             <EvidenceProvider render={(req, close) => (req ? <EvidenceDrawer {...req} onClose={close} /> : null)}>
-              <Shell />
+              <MemoShell />
             </EvidenceProvider>
           </SnapshotSeed>
         )}

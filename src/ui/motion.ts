@@ -13,6 +13,7 @@ export const reducedMotion = () => typeof window !== 'undefined' && window.match
 let markDone!: () => void
 const introDone = new Promise<void>(r => { markDone = r })
 export const markIntroDone = () => markDone()
+export const whenIntroDone = () => introDone
 
 const ease = (t: number) => 1 - Math.pow(1 - t, 3)
 

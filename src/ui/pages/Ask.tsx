@@ -70,7 +70,7 @@ function evidenceBars(evidence: Evidence[] | undefined): { items: BarItem[]; uni
   }
 }
 
-function AnswerBody({ text, evidence, refusal }: { text: string; evidence?: Evidence[]; refusal: boolean }) {
+export function AnswerBody({ text, evidence, refusal }: { text: string; evidence?: Evidence[]; refusal: boolean }) {
   const typed = useTyped(text)
   const done = typed.length >= text.length
   const bars = refusal ? null : evidenceBars(evidence)
