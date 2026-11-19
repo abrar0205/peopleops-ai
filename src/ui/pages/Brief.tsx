@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTRPC } from '../../browser/trpc'
 import type { KpiTile } from '../../api/queries'
@@ -102,8 +102,8 @@ function ShiftBoard({ flagged }: { flagged: Set<string> }) {
           <span role="columnheader" />
           {SHIFTS.map(s => <span key={s.key} role="columnheader">{s.label}</span>)}
         </div>
-        {ref.data.departments.map(d => (
-          <div className="board-row" role="row" key={d.code}>
+        {ref.data.departments.map((d, r) => (
+          <div className="board-row" role="row" key={d.code} style={{ ['--r' as string]: r }}>
             <span className="board-dept" role="rowheader">{d.name}</span>
             {SHIFTS.map(s => {
               const c = grid.data.rows.find(r => r.department_code === d.code && r.shift === s.key)
@@ -147,7 +147,7 @@ function Change({ signal }: { signal: Signal }) {
   const max = Math.max(a, b) || 1
   const level = signal.severity === 'high' ? 'act' : 'watch'
   return (
-    <li className={`change ${level}`}>
+    <li className={`change ${level}`} data-reveal>
       <span className="change-level">{level === 'act' ? 'Act' : 'Watch'}</span>
       <div className="change-body">
         <h3>{signal.title.replace(' · ', ' ')}</h3>
@@ -195,15 +195,18 @@ function Trust() {
         <p>of source rows pass every check and reach the figures on this page.</p>
         <EvidenceButton title="Data health by source" evidence={[q.data.health]} label="Query" />
       </div>
-      <ol className="trust-steps">
-        {steps.map(s => (
-          <li key={s.label}>
-            <strong>{s.n}</strong>
-            <span>{s.label}</span>
-            <small>{s.sub}</small>
-          </li>
-        ))}
-      </ol>
+      <div>
+        <Conveyor className="conveyor" held={[2]} />
+        <ol className="trust-steps">
+          {steps.map(s => (
+            <li key={s.label}>
+              <strong>{s.n}</strong>
+              <span>{s.label}</span>
+              <small>{s.sub}</small>
+            </li>
+          ))}
+        </ol>
+      </div>
     </div>
   )
 }
@@ -238,10 +241,42 @@ const FLOW = [
   { t: 'React', d: 'This page' },
 ]
 
+/** Records moving along a line; the ones in `held` drop out, as in the loading screen. */
+function Conveyor({ className, held = [] }: { className: string; held?: number[] }) {
+  const n = 5
+  return (
+    <div className={className} aria-hidden="true">
+      {Array.from({ length: n }, (_, i) => (
+        <span key={i} className={`run${held.includes(i) ? ' held' : ''}`} style={{ animationDelay: `${-(i / n) * 2.6}s` }}>
+          <i style={{ animationDelay: `${-(i / n) * 2.6}s` }} />
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** Adds `in` to [data-reveal] elements once they scroll into view. */
+function useReveal(root: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const el = root.current
+    if (!el || !('IntersectionObserver' in window)) return
+    const io = new IntersectionObserver(entries => {
+      for (const e of entries) if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target) }
+    }, { threshold: 0.35 })
+    const observe = () => el.querySelectorAll('[data-reveal]:not(.in)').forEach(n => io.observe(n))
+    observe()
+    const mo = new MutationObserver(observe)
+    mo.observe(el, { childList: true, subtree: true })
+    return () => { io.disconnect(); mo.disconnect() }
+  }, [root])
+}
+
 /* ------------------------------------------------------------------ page */
 
 export function Brief() {
   const trpc = useTRPC()
+  const root = useRef<HTMLDivElement>(null)
+  useReveal(root)
   const status = useQuery(trpc.meta.status.queryOptions())
   const kpis = useQuery(trpc.kpi.summary.queryOptions())
   const signals = useQuery(trpc.insights.signals.queryOptions())
@@ -253,10 +288,10 @@ export function Brief() {
   const flagged = new Set(changes.filter(s => s.department && s.shift && s.shift !== 'ALL').map(s => `${s.department}|${s.shift}`))
 
   return (
-    <div className="brief">
+    <div className="brief" ref={root}>
       <section className="hero">
         <div className="hero-copy">
-          <p className="hero-date">{status.data ? `Week ending ${fmtDate(status.data.asOf, { day: 'numeric', month: 'long', year: 'numeric' })}` : 'Loading this week'}, synthetic plant of about 2,600 people</p>
+          <p className="hero-date">Weekly people brief for a synthetic plant of about 2,600 people{status.data ? `, week ending ${fmtDate(status.data.asOf, { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}</p>
           <h1>{head ? head.title : <span className="ghost-line" />}</h1>
           <p className="hero-lead">{head?.lead ?? ''}</p>
           <div className="hero-actions">
@@ -273,11 +308,11 @@ export function Brief() {
 
       <section className="vitals" aria-label="Headline numbers">
         {primary.length === 4
-          ? primary.map(t => {
+          ? primary.map((t, i) => {
               const delta = t.value != null && t.previous != null ? t.value - t.previous : null
               const good = delta == null || t.goodDirection === 'none' ? null : (delta > 0) === (t.goodDirection === 'up')
               return (
-                <div className="vital" key={t.id}>
+                <div className="vital" key={t.id} style={{ ['--i' as string]: i }}>
                   <span className="vital-label">{t.label}</span>
                   <strong>{formatTile(t)}</strong>
                   <span className={`vital-delta ${good == null ? '' : good ? 'good' : 'bad'}`}>
@@ -324,6 +359,7 @@ export function Brief() {
           <h2>How it’s built</h2>
           <p>The whole stack runs in this browser tab: PostgreSQL compiled to WebAssembly, Prisma, a tRPC router and React. The same code runs on a Node server against real PostgreSQL, and GitHub Actions tests both.</p>
         </header>
+        <Conveyor className="track flow-track" />
         <ol className="flow">
           {FLOW.map(f => (
             <li key={f.t}><strong>{f.t}</strong><span>{f.d}</span></li>

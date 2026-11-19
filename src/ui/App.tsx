@@ -1,6 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import { bootBackend, type Backend, type BootStep } from '../browser/boot'
+import type { ApiContext } from '../api/context'
+import type { Snapshot } from '../api/snapshot'
+import { Intro, PHASES, phaseOf } from './Intro'
 import { makeClient, TRPCProvider, useTRPC } from '../browser/trpc'
 import { EvidenceProvider, Icon, Toast, fmtDate, href, useRoute } from './common'
 import { EvidenceDrawer } from './Evidence'
@@ -14,33 +17,29 @@ import { SqlLab } from './pages/SqlLab'
 import { Method } from './pages/Method'
 
 export const REPO_URL = 'https://github.com/abrar0205/peopleops-ai'
-const EXPECTED_STEPS = 11
-
 interface Runtime {
   backend: Backend | null
+  steps: BootStep[]
   rerun: () => Promise<void>
   rerunning: boolean
   notify: (msg: string) => void
 }
-const RuntimeCtx = createContext<Runtime>({ backend: null, rerun: async () => {}, rerunning: false, notify: () => {} })
+const RuntimeCtx = createContext<Runtime>({ backend: null, steps: [], rerun: async () => {}, rerunning: false, notify: () => {} })
 export const useRuntime = () => useContext(RuntimeCtx)
 
-function BootScreen({ steps, error }: { steps: BootStep[]; error?: unknown }) {
-  const done = steps.filter(s => s.ms != null).length
-  const current = [...steps].reverse().find(s => s.ms == null)?.label ?? 'Preparing analytics workspace'
+/** Nav badge: the real database boot, step by step, then "Live". */
+function EngineBadge() {
+  const { steps, backend } = useRuntime()
+  if (import.meta.env.VITE_API_URL) return null
+  const { idx, ready, ms } = phaseOf(steps)
+  const label = ready || backend ? 'Live database' : idx >= 0 ? `${PHASES[idx].label}…` : 'Starting the database…'
+  const detail = steps.filter(x => x.ms != null).map(x => `${x.label}: ${x.ms} ms`).join('\n')
   return (
-    <main className="boot boot-simple">
-      <div className="boot-simple-card">
-        <div className="brand-mark">P</div>
-        <span className="boot-eyebrow">PEOPLEOPS · INTERACTIVE DEMO</span>
-        <h1>Preparing the workforce dashboard</h1>
-        <p>Loading synthetic workforce data and the local analytics engine. Everything runs in this browser tab.</p>
-        <div className="progress" aria-hidden="true"><div style={{ width: `${Math.min(100, (done / EXPECTED_STEPS) * 100)}%` }} /></div>
-        {!error && <div className="boot-current"><span className="spinner" /> {current}</div>}
-        {error != null && <div className="callout warn"><strong>Could not start the demo.</strong> {error instanceof Error ? error.message : String(error)}</div>}
-        <div className="boot-tech">PostgreSQL · Prisma · tRPC · React · synthetic data only</div>
-      </div>
-    </main>
+    <a className={`engine${ready || backend ? ' ready' : ''}`} href={href('method')} title={ready ? `PostgreSQL is running in this tab. Booted in ${(ms / 1000).toFixed(1)} s.\n\n${detail}` : 'PostgreSQL is booting in this tab. The brief is already up to date; drill-downs, Ask and SQL unlock when it is ready.'}>
+      <span className="engine-dot" />
+      <span className="engine-text">{label}</span>
+      {(ready || backend) && <span className="engine-ms">{(ms / 1000).toFixed(1)} s</span>}
+    </a>
   )
 }
 
@@ -94,6 +93,7 @@ function Shell() {
               <a key={i.page} href={href(i.page)} className={section === i.page ? 'on' : ''} aria-current={section === i.page ? 'page' : undefined}>{i.label}</a>
             ))}
           </nav>
+          <EngineBadge />
           <a className="nav-gh" href={REPO_URL} target="_blank" rel="noreferrer" aria-label="Source on GitHub"><Icon name="github" /><span>GitHub</span></a>
         </div>
       </header>
@@ -126,9 +126,17 @@ function Shell() {
   )
 }
 
-function Providers({ backend, children }: { backend: Backend | null; children: ReactNode }) {
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+  promise.catch(() => {})
+  return { promise, resolve, reject }
+}
+
+function Providers({ ctx, children }: { ctx: Promise<ApiContext> | null; children: ReactNode }) {
   const queryClient = useMemo(() => new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false, refetchOnWindowFocus: false } } }), [])
-  const client = useMemo(() => makeClient(backend?.ctx ?? null), [backend])
+  const client = useMemo(() => makeClient(ctx), [ctx])
   return (
     <QueryClientProvider client={queryClient}>
       <TRPCProvider trpcClient={client} queryClient={queryClient}>{children}</TRPCProvider>
@@ -136,7 +144,23 @@ function Providers({ backend, children }: { backend: Backend | null; children: R
   )
 }
 
-function RuntimeProvider({ backend, children }: { backend: Backend | null; children: ReactNode }) {
+/** Put the build-time results into the query cache before the first render. */
+function SnapshotSeed({ snapshot, children }: { snapshot: Snapshot | null; children: ReactNode }) {
+  const trpc = useTRPC()
+  const queryClient = useQueryClient()
+  const [seeded] = useState(() => {
+    if (!snapshot) return false
+    for (const e of snapshot.entries) {
+      const proc = e.path.split('.').reduce<any>((o, k) => o[k], trpc) // eslint-disable-line @typescript-eslint/no-explicit-any
+      queryClient.setQueryData(proc.queryKey(e.input), e.data)
+    }
+    return true
+  })
+  void seeded
+  return <>{children}</>
+}
+
+function RuntimeProvider({ backend, steps, children }: { backend: Backend | null; steps: BootStep[]; children: ReactNode }) {
   const queryClient = useQueryClient()
   const [rerunning, setRerunning] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
@@ -153,33 +177,83 @@ function RuntimeProvider({ backend, children }: { backend: Backend | null; child
     }
   }, [backend, queryClient])
   return (
-    <RuntimeCtx.Provider value={{ backend, rerun, rerunning, notify }}>
+    <RuntimeCtx.Provider value={{ backend, steps, rerun, rerunning, notify }}>
       {children}
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </RuntimeCtx.Provider>
   )
 }
 
+const INTRO_KEY = 'peopleops-intro-seen'
+const seenIntro = () => { try { return localStorage.getItem(INTRO_KEY) === '1' } catch { return false } }
+const nextPaint = () => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 0))))
+
+/*
+ * Load order matters because PGlite runs on the main thread and blocks it in
+ * multi-second chunks. So: fetch the build-time snapshot, render the brief
+ * behind the intro, and only then boot the database. The intro fades out on a
+ * CSS timer (--intro), which keeps running while the main thread is busy.
+ */
 export default function App() {
   const remote = Boolean(import.meta.env.VITE_API_URL)
   const [steps, setSteps] = useState<BootStep[]>([])
   const [backend, setBackend] = useState<Backend | null>(null)
   const [error, setError] = useState<unknown>(null)
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
+  const [snapshotDone, setSnapshotDone] = useState(remote)
+  const [intro, setIntro] = useState<'show' | 'leaving' | 'gone'>(remote ? 'gone' : 'show')
+  const boot = useMemo(() => (remote ? null : deferred<Backend>()), [remote])
+  const ctx = useMemo(() => (boot ? boot.promise.then(b => b.ctx) : null), [boot])
   const started = useRef(false)
 
   useEffect(() => {
-    if (remote || started.current) return
-    started.current = true
-    bootBackend(setSteps).then(setBackend, setError)
+    document.documentElement.style.setProperty('--intro', remote ? '0s' : seenIntro() ? '0.9s' : '4.6s')
+    try { localStorage.setItem(INTRO_KEY, '1') } catch { /* storage unavailable */ }
   }, [remote])
 
-  if (!remote && !backend) return <BootScreen steps={steps} error={error} />
+  useEffect(() => {
+    if (!boot || started.current) return
+    started.current = true
+    const startDb = () => bootBackend(setSteps).then(
+      b => { setBackend(b); boot.resolve(b) },
+      e => { setError(e); boot.reject(e) },
+    )
+    fetch(`${import.meta.env.BASE_URL}snapshot.json`)
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((s: Snapshot) => setSnapshot(s), () => {})
+      .finally(() => { setSnapshotDone(true); void nextPaint().then(startDb) })
+  }, [boot])
+
+  const fromSnapshot = snapshotDone && Boolean(snapshot)
+  const canOpen = remote || Boolean(backend) || fromSnapshot
+  const close = useCallback(() => {
+    setIntro(i => (i === 'show' ? 'leaving' : i))
+    setTimeout(() => setIntro('gone'), 500)
+  }, [])
+  // Without a snapshot the intro waits for the live database instead of its timer.
+  useEffect(() => { if (intro === 'show' && backend && !fromSnapshot) close() }, [intro, backend, fromSnapshot, close])
+
   return (
-    <Providers backend={backend}>
-      <RuntimeProvider backend={backend}>
-        <EvidenceProvider render={(req, close) => (req ? <EvidenceDrawer {...req} onClose={close} /> : null)}>
-          <Shell />
-        </EvidenceProvider>
+    <Providers ctx={ctx}>
+      <RuntimeProvider backend={backend} steps={steps}>
+        {canOpen && (
+          <SnapshotSeed snapshot={snapshot}>
+            <EvidenceProvider render={(req, close) => (req ? <EvidenceDrawer {...req} onClose={close} /> : null)}>
+              <Shell />
+            </EvidenceProvider>
+          </SnapshotSeed>
+        )}
+        {intro !== 'gone' && (
+          <Intro
+            steps={steps}
+            snapshot={snapshot}
+            auto={fromSnapshot}
+            leaving={intro === 'leaving'}
+            error={error}
+            onSkip={() => { if (canOpen) close() }}
+            onDone={() => setIntro('gone')}
+          />
+        )}
       </RuntimeProvider>
     </Providers>
   )

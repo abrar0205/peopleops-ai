@@ -5,3 +5,4 @@ dist
 scratch/
 src/generated/
 *.tsbuildinfo
+public/snapshot.json

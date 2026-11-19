@@ -9,10 +9,12 @@ export const { TRPCProvider, useTRPC, useTRPCClient } = createTRPCContext<AppRou
  * With VITE_API_URL set, the UI talks to the Node server over HTTP.
  * Otherwise the same router runs in-process against the in-browser database.
  */
-export function makeClient(ctx: ApiContext | null) {
+export function makeClient(ctx: Promise<ApiContext> | null) {
   const url = import.meta.env.VITE_API_URL as string | undefined
   return createTRPCClient<AppRouter>({
-    links: [url || !ctx ? httpBatchLink({ url: url ?? '/trpc' }) : unstable_localLink({ router: appRouter, createContext: async () => ctx })],
+    // In browser mode the context is a promise: queries made before the
+    // database has booted simply wait for it.
+    links: [url || !ctx ? httpBatchLink({ url: url ?? '/trpc' }) : unstable_localLink({ router: appRouter, createContext: () => ctx })],
   })
 }
 
