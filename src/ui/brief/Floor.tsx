@@ -215,7 +215,7 @@ export function Floor({ teams, depts, shift, onShift, flagged, selectedDept, onS
             </button>
           ))}
         </div>
-        <p className="floor-count"><b>{fmtInt(total)}</b> people on {shift === 'ALL' ? 'the roster' : `the ${shift.toLowerCase()} shift`} · <b className="red">{fmtInt(absentNow)}</b> lost to unplanned absence on a typical day</p>
+        <p className="floor-count"><b>{fmtInt(total)}</b> people on {shift === 'ALL' ? 'the roster' : `the ${shift.toLowerCase()} shift`} · about <b className="red">{fmtInt(absentNow)}</b> full-time equivalents lost to unplanned absence</p>
       </div>
       <div
         className="floor-stage"
@@ -253,7 +253,7 @@ export function Floor({ teams, depts, shift, onShift, flagged, selectedDept, onS
       </div>
       <div className="floor-legend">
         <span><i className="lg-dot" /> One person on the roster</span>
-        <span><i className="lg-ring" /> Share lost to unplanned absence</span>
+        <span><i className="lg-ring" /> Absence rate shown as a share of the team</span>
         <span><i className="lg-flag" /> Team flagged this week</span>
         <span className="floor-hint">Select a department to open the team</span>
       </div>

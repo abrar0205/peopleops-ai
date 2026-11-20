@@ -17,13 +17,17 @@ export interface TeamData {
   signals: Signal[]
 }
 
-/** The selected team as people: one mark per person, red rings for the share lost to unplanned absence. */
+/**
+ * The selected team as people: one mark per person on the roster. Red marks show the
+ * absence rate as a share of the team (hours lost ÷ hours scheduled × headcount), a
+ * full-time-equivalent illustration, not a count of named absent employees.
+ */
 function PeopleStrip({ n, absent }: { n: number; absent: number }) {
   const cols = 24
   const rows = Math.ceil(n / cols)
   const marks = new Set(Array.from({ length: absent }, (_, k) => Math.floor(((k + 0.5) * n) / absent)))
   return (
-    <svg className="people" viewBox={`0 0 ${cols * 10} ${rows * 13}`} role="img" aria-label={`${n} people, about ${absent} lost to unplanned absence on a typical shift`}>
+    <svg className="people" viewBox={`0 0 ${cols * 10} ${rows * 13}`} role="img" aria-label={`${n} people on the roster; unplanned absence equal to about ${absent} full-time equivalents`}>
       {Array.from({ length: n }, (_, i) => {
         const x = (i % cols) * 10 + 5, y = Math.floor(i / cols) * 13 + 4
         const isAbsent = marks.has(i)
@@ -66,7 +70,7 @@ export function Team({ t, onAsk }: { t: TeamData; onAsk: (q: string) => void }) 
         <>
           <PeopleStrip n={t.employees} absent={absent} />
           <p className="team-lede">
-            <b>{fmt(t.rate)}%</b> of scheduled hours were lost to unplanned absence over the last four weeks, roughly <b className="red">{absent} of {t.employees}</b> people on a typical shift
+            <b>{fmt(t.rate)}%</b> of scheduled hours were lost to unplanned absence over the last four weeks, equal to about <b className="red">{absent} of {t.employees}</b> full-time equivalents
             {gap != null ? <>, {Math.abs(gap) < 0.5 ? 'in line with the plant' : `${fmt(Math.abs(gap))} points ${gap > 0 ? 'above' : 'below'} the plant`}.</> : '.'}
           </p>
         </>
